@@ -1056,7 +1056,6 @@ for dv in dependent_variables:
                 all_predictors.extend(effect_cols)
         
         # Run a single regression with all predictors
-        import pdb;pdb.set_trace()
         if len(all_predictors) > 0:
             try:
                 # Remove rows with any NaN values in predictors or DV
@@ -1080,6 +1079,7 @@ for dv in dependent_variables:
                     continue
                 
                 # Run multiple regression
+                import pdb;pdb.set_trace()
                 X = sm.add_constant(df_pred[valid_predictors])
                 model = sm.OLS(df_pred[dv], X).fit()
                 
