@@ -17,7 +17,7 @@ from sklearn.linear_model import RANSACRegressor
 from matplotlib.patches import ConnectionPatch
 
 
-plot_data = True
+plot_data = False
 
 
 # Create model type categories
@@ -1004,6 +1004,7 @@ for dv in dependent_variables:
         analysis_df = subset_df.copy()
         
         # Z-score the continuous predictors
+        import pdb;pdb.set_trace()
         for predictor in continuous_predictors:
             if predictor in analysis_df.columns and analysis_df[predictor].std() > 0:
                 analysis_df[f'{predictor}_z'] = (analysis_df[predictor] - analysis_df[predictor].mean()) / analysis_df[predictor].std()
