@@ -501,7 +501,7 @@ def create_plot(x_column, y_column='normalized_brain_score', title=None, save_pa
                 bbox=dict(facecolor='white', alpha=1.0, edgecolor='#CCCCCC', boxstyle='round,pad=0.5'),
                 zorder=10)
         
-        # Highlight the model at the changepoint and the far right model on the post-changepoint convex hull
+        # Highlight the model at the changepoint and the model with the highest x-value post-changepoint
         from matplotlib.patches import ConnectionPatch
         
         valid_x = x_data[valid_indices]
@@ -512,15 +512,13 @@ def create_plot(x_column, y_column='normalized_brain_score', title=None, save_pa
         distances_to_changepoint = np.sqrt((valid_x - change_x)**2 + (valid_y - change_y)**2)
         changepoint_model_idx = np.argmin(distances_to_changepoint)
         
-        # Compute post-changepoint convex hull
+        # Find model with the highest x-value post-changepoint
         post_mask = valid_x > change_x
         post_x, post_y = valid_x[post_mask], valid_y[post_mask]
-        post_hull_x, post_hull_y = compute_pareto_front(post_x, post_y)
         
-        # Find model at far right of post-changepoint convex hull
-        if len(post_hull_x) > 0:
-            far_right_idx = np.argmax(post_hull_x)
-            far_right_x, far_right_y = post_hull_x[far_right_idx], post_hull_y[far_right_idx]
+        if len(post_x) > 0:
+            far_right_idx = np.argmax(post_x)
+            far_right_x, far_right_y = post_x[far_right_idx], post_y[far_right_idx]
             far_right_model_idx = post_mask.nonzero()[0][far_right_idx]
         else:
             far_right_x, far_right_y = change_x, change_y
