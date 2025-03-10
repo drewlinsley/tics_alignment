@@ -808,6 +808,20 @@ joined_df['category'] = joined_df['model_type_category'] + ' - ' + joined_df['da
 # Calculate normalized brain score
 joined_df['normalized_brain_score'] = joined_df['brain_score'] / joined_df['ceiling_score']
 
+# # Prepare for statistics
+# Create a number_of_layers column
+joined_df['num_layers'] = joined_df['num_transformer_layers'] + joined_df['num_convolutional_layers'] + joined_df['num_dense_layers']
+
+# Create binary indicators for transformer and CNN
+joined_df['is_transformer'] = joined_df['model_type_category'].apply(lambda x: 1 if x in ["ViT", "ConvViT"] else 0)
+joined_df['is_cnn'] = joined_df['model_type_category'].apply(lambda x: 1 if x in ["CNN", "ConvViT"] else 0)
+
+# Create binary indicators for datasets
+joined_df['is_imagenet'] = joined_df['dataset_category'].apply(lambda x: 1 if x == 'ImageNet-1K' else 0)
+joined_df['is_internet_scale'] = joined_df['dataset_category'].apply(lambda x: 1 if x == 'Internet-scale vision' else 0)
+joined_df['is_adversarial'] = joined_df['dataset_category'].apply(lambda x: 1 if x == 'Adversarial' else 0)
+joined_df['is_language'] = joined_df['dataset_category'].apply(lambda x: 1 if x == 'Internet-scale vision & language' else 0)
+
 # Rename columns with hyphens to use underscores
 for col in joined_df.columns:
     if '-' in col:
@@ -920,21 +934,25 @@ dependent_variables = [
 
 # Define the categorical and continuous predictors
 categorical_predictors = [
-    'model_type_category',
-    'dataset_category',
-    'category'  # combined predictor
+    # 'model_type_category',
+    # 'dataset_category',
+    # 'category'  # combined predictor — interaction term between model_type_category and dataset_category
 ]
 
 continuous_predictors = [
+    'is_transformer',
+    'is_cnn',
+    'is_imagenet',
+    'is_internet_scale',
+    'is_adversarial',
+    'is_language',
     'input_size',
     'multi_label_acc',
     'total_params',
-    'num_transformer_layers',
     'num_normalizations',
     'num_skip_connections',
-    'num_convolutional_layers',
-    'num_dense_layers',
-    'final_receptive_field_size',
+    'num_layers',
+    # 'final_receptive_field_size',
     'num_strides',
     'num_max_pools'
 ]
@@ -1005,12 +1023,14 @@ for dv in dependent_variables:
         
         # Z-score the continuous predictors
         import pdb;pdb.set_trace()
+
         for predictor in continuous_predictors:
             if predictor in analysis_df.columns and analysis_df[predictor].std() > 0:
                 analysis_df[f'{predictor}_z'] = (analysis_df[predictor] - analysis_df[predictor].mean()) / analysis_df[predictor].std()
         
         # Effect-code the categorical predictors
         for predictor in categorical_predictors:
+            raise NotImplementedError("Categorical predictors are not implemented yet")
             if predictor in analysis_df.columns and len(analysis_df[predictor].unique()) >= 2:
                 # Get dummies with drop_first=True to create effect coding
                 dummies = pd.get_dummies(analysis_df[predictor], prefix=predictor, drop_first=True)
@@ -1032,6 +1052,7 @@ for dv in dependent_variables:
                 all_predictors.append(z_pred)
         
         # Add effect-coded categorical predictors
+        import pdb;pdb.set_trace()
         for predictor in categorical_predictors:
             if predictor in analysis_df.columns:
                 effect_cols = [col for col in analysis_df.columns if col.startswith(f'{predictor}_')]
