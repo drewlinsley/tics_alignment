@@ -17,8 +17,11 @@ from sklearn.linear_model import RANSACRegressor
 from matplotlib.patches import ConnectionPatch
 
 
-plot_data = False
+plot_data = True
 
+# At the top of the file, add a dictionary to store changepoints
+# This will be a global variable to store changepoints computed during plotting
+changepoint_cache = {}
 
 # Create model type categories
 def categorize_model_type(model_type):
@@ -143,8 +146,7 @@ def compute_piecewise_upper_bound(x, y):
     params = {
         'changepoint': (change_x, change_y),
         'first_point': (first_x, first_y),
-        'pre_hull': (pre_hull_x, pre_hull_y),
-        'post_hull': (post_hull_x, post_hull_y)
+        'last_point': (last_x, last_y)
     }
     
     return (pre_slope, pre_intercept), (post_slope, post_intercept), params
@@ -477,8 +479,11 @@ def create_plot(x_column, y_column='normalized_brain_score', title=None, save_pa
         # Extract parameters
         change_x, change_y = fit_params['changepoint']
         
-        # Store the changepoint for this x_column in the global dictionary
-        changepoints[x_column] = change_x
+        # Store the changepoint in the global cache with a key based on the columns
+        # This ensures we can retrieve it later for the ANOVA
+        global changepoint_cache
+        cache_key = f"{x_column}_{y_column}"
+        changepoint_cache[cache_key] = change_x
         
         # Plot pre-changepoint line - extend all the way across the plot
         x_pre = np.array([x_min, x_max])
@@ -967,72 +972,209 @@ os.makedirs(anova_dir, exist_ok=True)
 # Initialize a DataFrame to store ANOVA results for reporting
 all_anova_results = []  # pd.DataFrame(columns=['Dependent_Variable', 'Predictor', 'F_Value', 'p_Value', 'R_Squared'])
 
-# Before the ANOVA section, add a global dictionary to store changepoints
-# This should be placed at the top of your file, outside any functions
-changepoint_dict = {}
-
-# Modify create_plot to store the changepoint for each x_column
-def create_plot(x_column, y_column='normalized_brain_score', title=None, save_path=None, ylim=None, annotate_outliers=False):
-    # ... existing plotting code ...
-    
-    if sum(valid_indices) > 4:  # Need enough points for a meaningful fit
-        # Compute piecewise fit
-        (pre_slope, pre_intercept), (post_slope, post_intercept), fit_params = compute_piecewise_upper_bound(
-            x_data[valid_indices], 
-            y_data[valid_indices]
-        )
-        
-        # Extract parameters
-        change_x, change_y = fit_params['changepoint']
-        
-        # Store the changepoint for this x_column in the global dictionary
-        changepoint_dict[x_column] = change_x
-        
-        # ... rest of the plotting code ...
-
-# Now modify the ANOVA section around line 968
-# ANOVA section (around line 968)
+# Run ANOVA analyses for each dependent variable
 for dv in dependent_variables:
-    print(f"\n\nAnalysis for {dv}")
+    print(f"\nAnalyzing {dv}...")
     
-    # For each predictor, run the analysis
-    for x_column in continuous_predictors:
-        print(f"\nPredictor: {x_column}")
+    # Filter out rows with missing values for this dependent variable
+    df_filtered = joined_df[~joined_df[dv].isna()].copy()
+    
+    if len(df_filtered) < 5:
+        print(f"Not enough data for {dv}, skipping...")
+        continue
+    
+    # Use the stored changepoint if available
+    y_column = 'normalized_brain_score' if dv != 'normalized_brain_score' else 'spearman'
+    key = f"{dv}_{y_column}"
+    
+    changepoint_x = None
+    if key in changepoint_cache:
+        changepoint_x = changepoint_cache[key]
+        print(f"Using cached changepoint for {dv}: {changepoint_x}")
+    else:
+        # Compute the changepoint if not already stored
+        x_data = df_filtered[dv].values
+        y_data = df_filtered[y_column].values
+        valid_indices = ~np.isnan(x_data) & ~np.isnan(y_data)
         
-        # Get the changepoint from the dictionary if available
-        # Otherwise calculate it here (as a fallback)
-        if x_column in changepoint_dict:
-            changepoint = changepoint_dict[x_column]
-            print(f"Using stored changepoint: {changepoint}")
+        if sum(valid_indices) > 4:
+            _, _, params = compute_piecewise_upper_bound(
+                x_data[valid_indices], 
+                y_data[valid_indices]
+            )
+            if params is not None:
+                changepoint_x = params['changepoint'][0]  # x0 from the params
+                print(f"Computed changepoint for {dv}: {changepoint_x}")
+    
+    # Create data subsets based on changepoint
+    if changepoint_x is not None:
+        df_pre = df_filtered[df_filtered[dv] <= changepoint_x].copy()
+        df_post = df_filtered[df_filtered[dv] > changepoint_x].copy()
+        print(f"Pre-changepoint: {len(df_pre)} samples, Post-changepoint: {len(df_post)} samples")
+        
+        # Skip if either subset is too small
+        if len(df_pre) < 5 or len(df_post) < 5:
+            print(f"Not enough data in one of the subsets for {dv}, skipping split analysis...")
+            data_sets = [("all", df_filtered)]
         else:
-            # Compute changepoint using the same method as in create_plot
-            valid_indices = ~np.isnan(joined_df[x_column]) & ~np.isnan(joined_df[dv])
-            if sum(valid_indices) > 4:
-                (_, _), (_, _), fit_params = compute_piecewise_upper_bound(
-                    joined_df[x_column].values[valid_indices], 
-                    joined_df[dv].values[valid_indices]
-                )
-                changepoint = fit_params['changepoint'][0]
-                print(f"Calculated changepoint: {changepoint}")
-            else:
-                print(f"Not enough valid data points to compute changepoint for {x_column}")
-                continue
+            data_sets = [("all", df_filtered), ("pre", df_pre), ("post", df_post)]
+    else:
+        print(f"No changepoint found for {dv}, analyzing all data only")
+        data_sets = [("all", df_filtered)]
+    
+    # Run analyses for each data subset
+    for subset_name, subset_df in data_sets:
+        print(f"\nAnalyzing {subset_name} data for {dv}...")
         
-        # Now split the data into pre and post changepoint segments
-        pre_mask = joined_df[x_column] <= changepoint
-        post_mask = joined_df[x_column] > changepoint
+        # Create a working copy of the data
+        analysis_df = subset_df.copy()
         
-        # Create datasets for each segment
-        pre_data = joined_df[pre_mask].copy()
-        post_data = joined_df[post_mask].copy()
-        all_data = joined_df.copy()
+        # Z-score the continuous predictors
+        for predictor in continuous_predictors:
+            if predictor in analysis_df.columns and analysis_df[predictor].std() > 0:
+                analysis_df[f'{predictor}_z'] = (analysis_df[predictor] - analysis_df[predictor].mean()) / analysis_df[predictor].std()
         
-        # Run ANOVA for each segment
-        print("\nANOVA for all data:")
-        run_anova(all_data, x_column, dv)
+        # Effect-code the categorical predictors
+        for predictor in categorical_predictors:
+            raise NotImplementedError("Categorical predictors are not implemented yet")
+            if predictor in analysis_df.columns and len(analysis_df[predictor].unique()) >= 2:
+                # Get dummies with drop_first=True to create effect coding
+                dummies = pd.get_dummies(analysis_df[predictor], prefix=predictor, drop_first=True)
+                
+                # Convert from dummy (0/1) to effect coding (-1/1)
+                for col in dummies.columns:
+                    dummies[col] = dummies[col] * 2 - 1
+                
+                # Add to dataframe
+                analysis_df = pd.concat([analysis_df, dummies], axis=1)
         
-        print("\nANOVA for pre-changepoint data:")
-        run_anova(pre_data, x_column, dv)
+        # Run regression for all predictors using the same approach
+        all_predictors = []
         
-        print("\nANOVA for post-changepoint data:")
-        run_anova(post_data, x_column, dv)
+        # Add z-scored continuous predictors
+        for predictor in continuous_predictors:
+            z_pred = f'{predictor}_z'
+            if z_pred in analysis_df.columns and not analysis_df[z_pred].isna().all():
+                all_predictors.append(z_pred)
+        
+        # Add effect-coded categorical predictors
+        for predictor in categorical_predictors:
+            if predictor in analysis_df.columns:
+                effect_cols = [col for col in analysis_df.columns if col.startswith(f'{predictor}_')]
+                all_predictors.extend(effect_cols)
+        
+        # Run a single regression with all predictors
+        if len(all_predictors) > 0:
+            try:
+                # Remove rows with any NaN values in predictors or DV
+                mask = ~analysis_df[all_predictors + [dv]].isna().any(axis=1)
+                df_pred = analysis_df[mask].copy()
+                
+                if len(df_pred) < 5:
+                    print(f"Not enough data points for {dv}_{subset_name}")
+                    continue
+                    
+                # Check for zero variance predictors
+                valid_predictors = []
+                for pred in all_predictors:
+                    if df_pred[pred].std() > 0:
+                        valid_predictors.append(pred)
+                    else:
+                        print(f"Dropping {pred} due to zero variance")
+                
+                if len(valid_predictors) == 0:
+                    print(f"No valid predictors for {dv}_{subset_name}")
+                    continue
+                
+                # Run multiple regression
+                X = sm.add_constant(df_pred[valid_predictors])
+                model = sm.OLS(df_pred[dv], X).fit()
+                
+                # Extract overall model results
+                f_value = model.fvalue
+                p_value = model.f_pvalue
+                r_squared = model.rsquared
+                
+                print(f"\nOverall model for {dv}_{subset_name}:")
+                print(f"F={f_value:.2f}, p={p_value:.4f}, R²={r_squared:.4f}")
+                print("\nCoefficients:")
+                print(model.summary().tables[1])
+                
+                # Store results for each predictor
+                for predictor in valid_predictors:
+                    # Determine predictor type
+                    pred_type = 'continuous' if any(p in predictor for p in continuous_predictors) else 'categorical'
+                    orig_predictor = predictor.split('_')[0] if pred_type == 'categorical' else predictor.replace('_z', '')
+                    
+                    beta = model.params[predictor]
+                    p_val = model.pvalues[predictor]
+                    
+                    all_anova_results.append({
+                        'Dependent_Variable': f"{dv}_{subset_name}",
+                        'Predictor': orig_predictor,
+                        'Predictor_Type': pred_type,
+                        'F_Value': f_value,  # Overall model F
+                        'p_Value': p_val,    # Individual predictor p-value
+                        'R_Squared': r_squared,  # Overall model R²
+                        'Beta': beta,
+                        'Data_Subset': subset_name,
+                        'Sample_Size': len(df_pred)
+                    })
+                    
+                    # Create plots for significant predictors
+                    if p_val < 0.05:
+                        plt.figure(figsize=(10, 6))
+                        
+                        if pred_type == 'continuous':
+                            sns.regplot(x=predictor, y=dv, data=df_pred, scatter_kws={'alpha':0.7})
+                        else:
+                            sns.boxplot(x=df_pred[predictor], y=df_pred[dv])
+                            
+                        plt.title(f'Effect of {orig_predictor} on {dv} ({subset_name})\nβ={beta:.4f}, p={p_val:.4f}')
+                        plt.tight_layout()
+                        plt.savefig(os.path.join(anova_dir, f'regplot_{dv}_{orig_predictor}_{subset_name}.png'), dpi=300)
+                        plt.close()
+            except Exception as e:
+                print(f"Error analyzing {dv} ({subset_name}): {e}")
+
+# Create separate heatmaps for each data subset
+for subset_name in ["all", "pre", "post"]:
+    subset_results = pd.DataFrame([r for r in all_anova_results if r['Data_Subset'] == subset_name])
+    
+    if len(subset_results) > 0:
+        significant_results = subset_results[subset_results['p_Value'] < 0.05].copy()
+        
+        if len(significant_results) > 0:
+            # Save the significant results to a CSV
+            significant_results.to_csv(os.path.join(anova_dir, f'significant_relationships_{subset_name}.csv'), index=False)
+            
+            # Create a pivot table for the heatmap
+            heatmap_data = significant_results.pivot_table(
+                index='Predictor', 
+                columns='Dependent_Variable',
+                values='R_Squared',
+                fill_value=0
+            )
+            
+            plt.figure(figsize=(12, 10))
+            sns.heatmap(heatmap_data, annot=True, cmap='viridis', fmt='.2f')
+            plt.title(f'R-squared Values for Significant Predictors ({subset_name} data, p < 0.05)')
+            plt.tight_layout()
+            plt.savefig(os.path.join(anova_dir, f'r_squared_heatmap_{subset_name}.png'), dpi=300)
+            plt.close()
+            
+            # Create a heatmap of F-values
+            f_heatmap_data = significant_results.pivot_table(
+                index='Predictor', 
+                columns='Dependent_Variable',
+                values='F_Value',
+                fill_value=0
+            )
+            
+            plt.figure(figsize=(12, 10))
+            sns.heatmap(f_heatmap_data, annot=True, cmap='magma', fmt='.1f', norm=LogNorm())
+            plt.title(f'F-Values for Significant Predictors ({subset_name} data, p < 0.05)')
+            plt.tight_layout()
+            plt.savefig(os.path.join(anova_dir, f'f_value_heatmap_{subset_name}.png'), dpi=300)
+            plt.close()
+print(f"\nAll ANOVA analyses complete. Results saved to {anova_dir}/")
