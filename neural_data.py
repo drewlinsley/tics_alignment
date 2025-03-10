@@ -801,6 +801,7 @@ language_model_indicators = ['clip', 'openai', 'laion2b']
 language_mask = joined_df['full_model'].str.lower().apply(
     lambda x: any(indicator in x for indicator in language_model_indicators)
 joined_df["vision_or_VLM"] = joined_df["dataset_category"].apply(lambda x: "vision" if "language" not in x else "VLM")
+)
 joined_df.loc[language_mask, 'dataset_category'] = "Internet-scale vision & language"
 
 lost_models = set(joined_df["model"].iloc[joined_df.index.isin(range(pre_merge_count))]) - set(joined_df['model'])
