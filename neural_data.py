@@ -365,18 +365,20 @@ def create_plot(x_column, y_column='normalized_brain_score', title=None, save_pa
     # Main plot subplot
     ax_main = plt.subplot(gs[0])
     
-    # Get current axis limits early
-    x_min, x_max = plt.xlim()
-    y_min, y_max = plt.ylim()
-    
     # Track whether equations have been plotted
     equations_plotted = False
     
+    # Load the data first - keep all your existing data loading code here
+    # ...
+    
+    # After data is loaded and valid_indices is created, then add the human accuracy patch
+    # This should be after x_data and valid_indices are defined
+    
     # Add human accuracy patch for multi_label_acc plots
-    human_accuracy_region = None
     if x_column == 'multi_label_acc':
-        # Get current y-axis limits
+        # Get current y-axis limits after plotting data
         y_min, y_max = ax_main.get_ylim() if ylim is None else ylim
+        x_min, x_max = ax_main.get_xlim()
         
         # Create a light gray patch for human accuracy range
         human_acc_min = 0.919
@@ -394,7 +396,7 @@ def create_plot(x_column, y_column='normalized_brain_score', title=None, save_pa
         )
         ax_main.add_patch(rect)
         
-        # Calculate mean y-value of dots with x > human_acc_min
+        # Now that we have x_data and valid_indices, calculate the mean y-value
         valid_x = x_data[valid_indices]
         valid_y = y_data[valid_indices]
         
@@ -486,6 +488,10 @@ def create_plot(x_column, y_column='normalized_brain_score', title=None, save_pa
         
         # Extract parameters
         change_x, change_y = fit_params['changepoint']
+        
+        # Get updated axis limits
+        x_min, x_max = ax_main.get_xlim()
+        y_min, y_max = ax_main.get_ylim()
         
         # Plot pre-changepoint line - extend all the way across the plot
         x_pre = np.array([x_min, x_max])
