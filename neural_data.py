@@ -1178,3 +1178,151 @@ for subset_name in ["all", "pre", "post"]:
             plt.savefig(os.path.join(anova_dir, f'f_value_heatmap_{subset_name}.png'), dpi=300)
             plt.close()
 print(f"\nAll ANOVA analyses complete. Results saved to {anova_dir}/")
+
+def plot_anova_results(results_data, save_path=None):
+    """
+    Plot pre-changepoint vs post-changepoint ANOVA results in a heatmap.
+    
+    Args:
+        results_data: Dictionary with ANOVA results
+        save_path: Optional path to save the figure
+    """
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+    import numpy as np
+    import pandas as pd
+    
+    # Extract the predictors and dependent variables from results
+    predictors = []
+    dependent_vars = []
+    
+    for key in results_data:
+        if '_pre' in key or '_post' in key:
+            parts = key.split('_')
+            predictor = '_'.join(parts[:-2])  # Get predictor name
+            dv = parts[-2]  # Get dependent variable name
+            
+            if predictor not in predictors:
+                predictors.append(predictor)
+            if dv not in dependent_vars:
+                dependent_vars.append(dv)
+    
+    # Sort for consistent ordering
+    predictors.sort()
+    dependent_vars.sort()
+    
+    # For each dependent variable, create a heatmap
+    for dv in dependent_vars:
+        # Create matrices for coefficients and p-values
+        coef_matrix = np.zeros((len(predictors), 2))  # 2 columns: pre and post
+        pval_matrix = np.ones((len(predictors), 2))   # Default p-value = 1 (not significant)
+        
+        # Fill matrices with values
+        for i, predictor in enumerate(predictors):
+            # Pre-changepoint
+            pre_key = f"{predictor}_{dv}_pre"
+            if pre_key in results_data and 'coefficient' in results_data[pre_key]:
+                coef_matrix[i, 0] = results_data[pre_key]['coefficient']
+                pval_matrix[i, 0] = results_data[pre_key]['p_value']
+            
+            # Post-changepoint
+            post_key = f"{predictor}_{dv}_post"
+            if post_key in results_data and 'coefficient' in results_data[post_key]:
+                coef_matrix[i, 1] = results_data[post_key]['coefficient']
+                pval_matrix[i, 1] = results_data[post_key]['p_value']
+        
+        # Create a DataFrame for the heatmap
+        heatmap_df = pd.DataFrame(
+            coef_matrix,
+            index=predictors,
+            columns=['Pre-changepoint', 'Post-changepoint']
+        )
+        
+        # Calculate significance annotation matrix
+        sig_annotations = np.empty_like(pval_matrix, dtype=object)
+        sig_annotations.fill('')
+        
+        # Add significance stars
+        sig_annotations[pval_matrix < 0.05] = '*'
+        sig_annotations[pval_matrix < 0.01] = '**'
+        sig_annotations[pval_matrix < 0.001] = '***'
+        
+        # Convert to DataFrame
+        annotations_df = pd.DataFrame(
+            sig_annotations,
+            index=predictors,
+            columns=['Pre-changepoint', 'Post-changepoint']
+        )
+        
+        # Determine color map limits for better visualization
+        vmax = np.max(np.abs(coef_matrix))
+        vmin = -vmax
+        
+        # Create the plot
+        plt.figure(figsize=(10, len(predictors) * 0.4 + 2))
+        plt.title(f'ANOVA Coefficients: {dv}', fontsize=14)
+        
+        # Create the heatmap
+        ax = sns.heatmap(
+            heatmap_df,
+            annot=True,
+            fmt='.3f',
+            cmap='coolwarm',  # Continuous colormap: red negative, blue positive
+            vmin=vmin,
+            vmax=vmax,
+            cbar_kws={'label': 'Coefficient Value'},
+            linewidths=0.5
+        )
+        
+        # Add significance stars
+        for i in range(len(predictors)):
+            for j in range(2):  # 2 columns: pre and post
+                if sig_annotations[i, j]:
+                    ax.text(j + 0.5, i + 0.85, sig_annotations[i, j], 
+                            horizontalalignment='center', verticalalignment='center',
+                            color='black', fontweight='bold')
+        
+        plt.tight_layout()
+        
+        # Save if path provided
+        if save_path:
+            plt_save_path = save_path.replace('.png', f'_{dv}_anova_heatmap.png')
+            plt.savefig(plt_save_path, dpi=300, bbox_inches='tight')
+            print(f"Saved ANOVA heatmap to {plt_save_path}")
+        
+        plt.show()
+
+# In your ANOVA section, after running the analyses, collect results and call the plotting function:
+def run_anova_analyses():
+    # ... existing ANOVA setup and execution ...
+    
+    # Dictionary to collect results for heatmap
+    anova_results = {}
+    
+    # For each independent and dependent variable combination
+    for x_column in independent_variables:
+        for y_column in dependent_variables:
+            print(f"\nAnalyzing {y_column} vs {x_column}")
+            
+            # ... existing ANOVA code that splits data and performs analysis ...
+            
+            # Store pre-changepoint results
+            if len(pre_df) > 10:
+                # Run pre-changepoint ANOVA
+                pre_result = run_anova(pre_df, x_column, y_column)  # This function needs to return coefficient and p-value
+                anova_results[f"{x_column}_{y_column}_pre"] = {
+                    'coefficient': pre_result.coefficient,  # Adjust based on your ANOVA function output
+                    'p_value': pre_result.p_value
+                }
+            
+            # Store post-changepoint results
+            if len(post_df) > 10:
+                # Run post-changepoint ANOVA
+                post_result = run_anova(post_df, x_column, y_column)
+                anova_results[f"{x_column}_{y_column}_post"] = {
+                    'coefficient': post_result.coefficient,  # Adjust based on your ANOVA function output
+                    'p_value': post_result.p_value
+                }
+    
+    # Plot the results as heatmaps
+    plot_anova_results(anova_results, save_path="anova_results.png")
