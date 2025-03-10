@@ -500,6 +500,120 @@ def create_plot(x_column, y_column='normalized_brain_score', title=None, save_pa
                 va='top',
                 bbox=dict(facecolor='white', alpha=1.0, edgecolor='#CCCCCC', boxstyle='round,pad=0.5'),
                 zorder=10)
+        
+        # Highlight the model at the changepoint and the far right model on the post-changepoint convex hull
+        from matplotlib.patches import ConnectionPatch
+        
+        valid_x = x_data[valid_indices]
+        valid_y = y_data[valid_indices]
+        valid_models = joined_df.iloc[valid_indices].reset_index(drop=True)
+        
+        # Find model closest to changepoint
+        distances_to_changepoint = np.sqrt((valid_x - change_x)**2 + (valid_y - change_y)**2)
+        changepoint_model_idx = np.argmin(distances_to_changepoint)
+        
+        # Compute post-changepoint convex hull
+        post_mask = valid_x > change_x
+        post_x, post_y = valid_x[post_mask], valid_y[post_mask]
+        post_hull_x, post_hull_y = compute_pareto_front(post_x, post_y)
+        
+        # Find model at far right of post-changepoint convex hull
+        if len(post_hull_x) > 0:
+            far_right_idx = np.argmax(post_hull_x)
+            far_right_x, far_right_y = post_hull_x[far_right_idx], post_hull_y[far_right_idx]
+            far_right_model_idx = post_mask.nonzero()[0][far_right_idx]
+        else:
+            far_right_x, far_right_y = change_x, change_y
+            far_right_model_idx = changepoint_model_idx
+        
+        # Get model names
+        possible_name_cols = ['model_name', 'name', 'meta_name', 'model', 'model_id']
+        model_name_col = None
+        
+        for col in possible_name_cols:
+            if col in valid_models.columns:
+                model_name_col = col
+                break
+                
+        if model_name_col is None:
+            changepoint_model_name = "Changepoint Model"
+            far_right_model_name = "Far Right Model"
+        else:
+            def get_short_name(full_name):
+                if '/' in str(full_name):
+                    parts = str(full_name).split('/')
+                    return parts[-1]
+                else:
+                    name = str(full_name)
+                    if len(name) > 20:
+                        return name[:17] + "..."
+                    return name
+            
+            changepoint_model_name = get_short_name(valid_models.iloc[changepoint_model_idx][model_name_col])
+            far_right_model_name = get_short_name(valid_models.iloc[far_right_model_idx][model_name_col])
+        
+        # Helper function to adjust arrow endpoint to be very close to the dot's center
+        def adjust_endpoint(start_x, start_y, end_x, end_y, marker_radius=0.005):
+            dx, dy = end_x - start_x, end_y - start_y
+            distance = np.sqrt(dx**2 + dy**2)
+            
+            if distance < marker_radius:
+                return end_x, end_y
+                
+            dx, dy = dx/distance, dy/distance
+            adjusted_end_x = end_x - dx * marker_radius
+            adjusted_end_y = end_y - dy * marker_radius
+            
+            return adjusted_end_x, adjusted_end_y
+        
+        # Calculate appropriate marker distance
+        x_range = x_max - x_min
+        y_range = y_max - y_min
+        plot_scale = np.sqrt(x_range**2 + y_range**2)
+        marker_distance = plot_scale * 0.003
+        
+        # Add annotation for changepoint model
+        cp_x, cp_y = valid_x[changepoint_model_idx], valid_y[changepoint_model_idx]
+        cp_text_x, cp_text_y = cp_x - 0.05 * (x_max - x_min), cp_y + 0.05 * (y_max - y_min)
+        adjusted_cp_x, adjusted_cp_y = adjust_endpoint(cp_text_x, cp_text_y, cp_x, cp_y, marker_distance)
+        
+        con = ConnectionPatch(
+            xyA=(cp_text_x, cp_text_y),
+            xyB=(adjusted_cp_x, adjusted_cp_y),
+            coordsA="data", coordsB="data",
+            arrowstyle="-|>", 
+            color="black",
+            connectionstyle=f"arc3,rad={0.2}",
+            linewidth=1,
+            zorder=11
+        )
+        plt.gca().add_artist(con)
+        
+        plt.text(cp_text_x, cp_text_y, changepoint_model_name, fontsize=8,
+                ha='center', va='center',
+                bbox=dict(facecolor='white', alpha=0.8, edgecolor='black', boxstyle='round,pad=0.3'),
+                zorder=12)
+        
+        # Add annotation for far right model
+        far_right_text_x, far_right_text_y = far_right_x - 0.05 * (x_max - x_min), far_right_y + 0.05 * (y_max - y_min)
+        adjusted_far_right_x, adjusted_far_right_y = adjust_endpoint(far_right_text_x, far_right_text_y, far_right_x, far_right_y, marker_distance)
+        
+        con = ConnectionPatch(
+            xyA=(far_right_text_x, far_right_text_y),
+            xyB=(adjusted_far_right_x, adjusted_far_right_y),
+            coordsA="data", coordsB="data",
+            arrowstyle="-|>", 
+            color="black",
+            connectionstyle=f"arc3,rad={0.2}",
+            linewidth=1,
+            zorder=11
+        )
+        plt.gca().add_artist(con)
+        
+        plt.text(far_right_text_x, far_right_text_y, far_right_model_name, fontsize=8,
+                ha='center', va='center',
+                bbox=dict(facecolor='white', alpha=0.8, edgecolor='black', boxstyle='round,pad=0.3'),
+                zorder=12)
     
     # Set labels and style for main plot
     if title and ' vs ' in title:
@@ -715,25 +829,25 @@ if plot_data:
     #         ylim=(0, 1))
     
     # Then create annotated versions
-    # create_plot('multi_label_acc', 
-    #         title='Brain Score vs Multi-label Accuracy', 
-    #         save_path=os.path.join(output_dir, 'multi_label_acc_vs_brain_annotated.png'),
-    #         ylim=(0, 1),
-    #         annotate_outliers=True)
+    create_plot('multi_label_acc', 
+            title='Brain Score vs Multi-label Accuracy', 
+            save_path=os.path.join(output_dir, 'multi_label_acc_vs_brain_annotated.png'),
+            ylim=(0, 1),
+            annotate_outliers=True)
     
-    # # # Repeat for other plots
-    # # create_plot('multi_label_acc', 
-    # #         y_column='spearman',
-    # #         title='ClickMe vs Multi-label Accuracy', 
-    # #         save_path=os.path.join(output_dir, 'multi_label_acc_vs_clickme.png'),
-    # #         ylim=(-0.3, 1))
-    
+    # # Repeat for other plots
     # create_plot('multi_label_acc', 
     #         y_column='spearman',
     #         title='ClickMe vs Multi-label Accuracy', 
-    #         save_path=os.path.join(output_dir, 'multi_label_acc_vs_clickme_annotated.png'),
-    #         ylim=(-0.3, 1),
-    #         annotate_outliers=True)
+    #         save_path=os.path.join(output_dir, 'multi_label_acc_vs_clickme.png'),
+    #         ylim=(-0.3, 1))
+    
+    create_plot('multi_label_acc', 
+            y_column='spearman',
+            title='ClickMe vs Multi-label Accuracy', 
+            save_path=os.path.join(output_dir, 'multi_label_acc_vs_clickme_annotated.png'),
+            ylim=(-0.3, 1),
+            annotate_outliers=True)
 
     # create_plot('results_imagenet', 
     #         title='Brain Score vs ImageNet Accuracy', 
