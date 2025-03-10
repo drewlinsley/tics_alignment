@@ -1079,7 +1079,6 @@ for dv in dependent_variables:
                     continue
                 
                 # Run multiple regression
-                import pdb;pdb.set_trace()
                 X = sm.add_constant(df_pred[valid_predictors])
                 model = sm.OLS(df_pred[dv], X).fit()
                 
@@ -1127,7 +1126,6 @@ for dv in dependent_variables:
                         plt.tight_layout()
                         plt.savefig(os.path.join(anova_dir, f'regplot_{dv}_{orig_predictor}_{subset_name}.png'), dpi=300)
                         plt.close()
-            
             except Exception as e:
                 print(f"Error analyzing {dv} ({subset_name}): {e}")
 
@@ -1171,5 +1169,4 @@ for subset_name in ["all", "pre", "post"]:
             plt.tight_layout()
             plt.savefig(os.path.join(anova_dir, f'f_value_heatmap_{subset_name}.png'), dpi=300)
             plt.close()
-
 print(f"\nAll ANOVA analyses complete. Results saved to {anova_dir}/")
