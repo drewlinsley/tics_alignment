@@ -1050,7 +1050,6 @@ for dv in dependent_variables:
                 all_predictors.append(z_pred)
         
         # Add effect-coded categorical predictors
-        import pdb;pdb.set_trace()
         for predictor in categorical_predictors:
             if predictor in analysis_df.columns:
                 effect_cols = [col for col in analysis_df.columns if col.startswith(f'{predictor}_')]
