@@ -13,6 +13,8 @@ from statsmodels.nonparametric.smoothers_lowess import lowess
 import matplotlib.patches as mpatches
 from scipy.optimize import curve_fit
 import colorsys
+from sklearn.linear_model import RANSACRegressor
+from matplotlib.patches import ConnectionPatch
 
 
 plot_data = True
@@ -56,218 +58,228 @@ def piecewise_linear(x, x0, y0, k1, k2):
     """
     return np.where(x < x0, y0 + k1 * (x - x0), y0 + k2 * (x - x0))
 
-def compute_piecewise_upper_bound(x, y, bins=8):
+def compute_piecewise_upper_bound(x, y):
     """
-    Computes piecewise linear upper bound based on convex hull (Pareto front).
-    Returns the curve points and the breakpoint parameters.
+    Compute a piecewise linear fit with a single changepoint.
+    
+    Args:
+        x: Array of x-coordinates
+        y: Array of y-coordinates
+        
+    Returns:
+        Tuple containing:
+        - pre_line: (slope, intercept) for pre-changepoint line
+        - post_line: (slope, intercept) for post-changepoint line
+        - params: Dictionary with additional parameters
     """
-    # Sort data by x values
+    # Detect the changepoint
+    change_x, change_y = detect_changepoint(x, y)
+    
+    # Split data into pre and post changepoint segments
+    pre_mask = x <= change_x
+    post_mask = x > change_x
+    
+    pre_x, pre_y = x[pre_mask], y[pre_mask]
+    post_x, post_y = x[post_mask], y[post_mask]
+    
+    # Compute hulls for each segment
+    pre_hull_x, pre_hull_y = compute_pareto_front(pre_x, pre_y)
+    post_hull_x, post_hull_y = compute_pareto_front(post_x, post_y)
+    
+    # Get first point on pre-hull
+    if len(pre_hull_x) > 0:
+        first_x, first_y = pre_hull_x[0], pre_hull_y[0]
+    else:
+        first_x, first_y = change_x, change_y
+    
+    # Fit pre-line: passes through first hull point and changepoint
+    if len(pre_hull_x) >= 2:
+        pre_slope, pre_intercept = fit_hull_segment(pre_hull_x, pre_hull_y, (change_x, change_y))
+    else:
+        # Direct line between first point and changepoint
+        if first_x != change_x:
+            pre_slope = (change_y - first_y) / (change_x - first_x)
+        else:
+            pre_slope = 0
+        pre_intercept = change_y - pre_slope * change_x
+    
+    # Fit post-line: use all points on the post-hull and constrain to pass through changepoint
+    if len(post_hull_x) >= 2:
+        # Shift coordinates so changepoint is at origin
+        shifted_x = post_hull_x - change_x
+        shifted_y = post_hull_y - change_y
+        
+        # Fit through origin (constrained to pass through changepoint)
+        if np.any(shifted_x != 0):  # Avoid division by zero
+            # Use weighted fit to give more importance to points with higher y values
+            weights = post_hull_y / np.max(post_hull_y) if np.max(post_hull_y) > 0 else np.ones_like(post_hull_y)
+            model = sm.WLS(shifted_y, shifted_x[:, np.newaxis], weights=weights).fit()
+            post_slope = model.params[0]
+        else:
+            post_slope = 0
+        post_intercept = change_y - post_slope * change_x
+        
+        # Validate the fit - if it's not reasonably tracking the convex hull, 
+        # default to using the last hull point
+        if len(post_hull_x) > 2:
+            # Check fit quality by ensuring most points are above the line (with some tolerance)
+            y_pred = post_slope * post_hull_x + post_intercept
+            points_above = np.sum(post_hull_y > (y_pred - 0.01))
+            
+            if points_above < len(post_hull_x) * 0.5:  # If fewer than half the points are above line
+                # Use last hull point instead
+                last_x, last_y = post_hull_x[-1], post_hull_y[-1]
+                if last_x != change_x:
+                    post_slope = (last_y - change_y) / (last_x - change_x)
+                else:
+                    post_slope = 0
+                post_intercept = change_y - post_slope * change_x
+    else:
+        # Fallback if not enough points
+        post_slope = 0
+        post_intercept = change_y
+    
+    # Build parameters dictionary
+    params = {
+        'changepoint': (change_x, change_y),
+        'first_point': (first_x, first_y),
+        'pre_hull': (pre_hull_x, pre_hull_y),
+        'post_hull': (post_hull_x, post_hull_y)
+    }
+    
+    return (pre_slope, pre_intercept), (post_slope, post_intercept), params
+
+# Helper function to compute Pareto front - ensures full range coverage
+def compute_pareto_front(x, y):
+    """
+    Compute the Pareto front (convex hull of max y values) for a set of points.
+    
+    Args:
+        x: Array of x-coordinates
+        y: Array of y-coordinates
+        
+    Returns:
+        Tuple of arrays (hull_x, hull_y) representing the Pareto front points
+    """
+    # Sort points by x-coordinate
     idx = np.argsort(x)
     x_sorted = x[idx]
     y_sorted = y[idx]
     
-    print(f"Computing piecewise upper bound with {len(x_sorted)} points")
-    
-    # First step: bin the data and find max y in each bin to reduce noise
-    bins = np.linspace(x_sorted.min(), x_sorted.max(), num=bins)
-    bin_indices = np.digitize(x_sorted, bins)
-    
-    max_points_x = []
-    max_points_y = []
-    for i in range(1, len(bins)):
-        mask = bin_indices == i
-        if np.any(mask):
-            max_points_x.append(x_sorted[mask][np.argmax(y_sorted[mask])])
-            max_points_y.append(np.max(y_sorted[mask]))
-    
-    # Convert to numpy arrays for further processing
-    points = np.array(list(zip(max_points_x, max_points_y)))
-    
-    if len(points) < 3:
-        print("Not enough points after binning")
-        # Return a simple default model
-        x0 = (x_sorted.max() + x_sorted.min()) / 2
-        y0 = np.median(y_sorted)
-        k1 = 0
-        k2 = 0
-        return x_sorted, y_sorted, [x0, y0, k1, k2]
-    
-    # Sort points by x-coordinate
-    points = points[points[:, 0].argsort()]
-    
-    # Compute upper convex hull (Pareto front)
-    pareto_indices = []
+    # Compute the Pareto front (max y value for each x)
+    hull_indices = []
     current_max_y = float('-inf')
     
-    # Manual Pareto front computation
-    for i in range(len(points)):
-        if points[i, 1] > current_max_y:
-            pareto_indices.append(i)
-            current_max_y = points[i, 1]
+    for i in range(len(x_sorted)):
+        if y_sorted[i] > current_max_y:
+            hull_indices.append(i)
+            current_max_y = y_sorted[i]
     
-    # Get the Pareto front points
-    pareto_points = points[pareto_indices]
+    # Return the hull points
+    hull_x = x_sorted[hull_indices]
+    hull_y = y_sorted[hull_indices]
     
-    print(f"Found {len(pareto_points)} points on Pareto front")
+    return hull_x, hull_y
+
+def detect_changepoint(x, y):
+    """
+    Detect the changepoint where y starts to decrease after increasing.
     
-    # If we have sufficient points on the Pareto front
-    if len(pareto_points) > 3:
-        # Find the peak in the Pareto front
-        max_y_idx = np.argmax(pareto_points[:, 1])
-        x0 = pareto_points[max_y_idx, 0]
-        y0 = pareto_points[max_y_idx, 1]
+    Args:
+        x: Array of x-coordinates
+        y: Array of y-coordinates
         
-        print(f"Peak found at x={x0}, y={y0}")
+    Returns:
+        Tuple (change_x, change_y) representing the changepoint coordinates
+    """
+    # Compute the Pareto front
+    hull_x, hull_y = compute_pareto_front(x, y)
+    
+    if len(hull_x) < 3:
+        # Not enough points for changepoint detection
+        # Return the point with maximum y
+        max_idx = np.argmax(hull_y)
+        return hull_x[max_idx], hull_y[max_idx]
+    
+    # Calculate slopes between consecutive hull points
+    slopes = np.diff(hull_y) / np.diff(hull_x)
+    
+    # Find where slope changes from positive to negative
+    change_indices = []
+    for i in range(1, len(slopes)):
+        if slopes[i-1] > 0 and slopes[i] < 0:
+            change_indices.append(i)
+    
+    if change_indices:
+        # Find the largest drop in slope
+        max_drop_idx = change_indices[0]
+        max_drop = slopes[change_indices[0]-1] - slopes[change_indices[0]]
         
-        # Now compute separate Pareto fronts for pre and post changepoint
-        # First, split all original points
-        pre_points = points[points[:, 0] <= x0]
-        post_points = points[points[:, 0] > x0]
+        for idx in change_indices[1:]:
+            drop = slopes[idx-1] - slopes[idx]
+            if drop > max_drop:
+                max_drop = drop
+                max_drop_idx = idx
         
-        # Compute Pareto front for pre-changepoint region
-        pre_pareto_indices = []
-        pre_max_y = float('-inf')
+        # The changepoint is at the end of the positive slope
+        change_idx = max_drop_idx
+        return hull_x[change_idx], hull_y[change_idx]
+    else:
+        # If no clear positive-to-negative transition, use the peak
+        max_idx = np.argmax(hull_y)
+        return hull_x[max_idx], hull_y[max_idx]
+
+def fit_hull_segment(hull_x, hull_y, fixed_point=None):
+    """
+    Fit a line to hull points, ensuring it passes through a fixed point if specified.
+    
+    Args:
+        hull_x: x-coordinates of hull points
+        hull_y: y-coordinates of hull points
+        fixed_point: Optional tuple (x, y) that the line must pass through
         
-        for i in range(len(pre_points)):
-            if pre_points[i, 1] > pre_max_y:
-                pre_pareto_indices.append(i)
-                pre_max_y = pre_points[i, 1]
-        
-        pre_pareto = pre_points[pre_pareto_indices] if pre_pareto_indices else None
-        
-        # Compute Pareto front for post-changepoint region
-        # For post region, we want decreasing values as x increases
-        post_pareto_indices = []
-        post_min_x = float('inf')
-        
-        # Sort by y-coordinate descending
-        post_points = post_points[post_points[:, 1].argsort()[::-1]]
-        
-        for i in range(len(post_points)):
-            if post_points[i, 0] < post_min_x:
-                post_pareto_indices.append(i)
-                post_min_x = post_points[i, 0]
-        
-        post_pareto = post_points[post_pareto_indices] if post_pareto_indices else None
-        
-        # Resort post_pareto by x-coordinate
-        if post_pareto is not None and len(post_pareto) > 0:
-            post_pareto = post_pareto[post_pareto[:, 0].argsort()]
-        
-        # Fit lines to the separate Pareto fronts
-        k1, k2 = None, None
-        
-        if pre_pareto is not None and len(pre_pareto) > 2:
-            try:
-                X_pre = sm.add_constant(pre_pareto[:, 0])
-                model_pre = sm.OLS(pre_pareto[:, 1], X_pre).fit()
-                k1 = model_pre.params[1]
-                print(f"Pre-changepoint slope: k1={k1}")
-            except Exception as e:
-                print(f"Error fitting pre-changepoint: {e}")
-        
-        if post_pareto is not None and len(post_pareto) > 2:
-            try:
-                X_post = sm.add_constant(post_pareto[:, 0])
-                model_post = sm.OLS(post_pareto[:, 1], X_post).fit()
-                k2 = model_post.params[1]
-                print(f"Post-changepoint slope: k2={k2}")
-            except Exception as e:
-                print(f"Error fitting post-changepoint: {e}")
-        
-        # If either fit failed, fall back to fitting original points
-        if k1 is None or k2 is None:
-            print("Falling back to original pareto front for fitting")
+    Returns:
+        Tuple (slope, intercept) for the fitted line
+    """
+    if len(hull_x) < 2:
+        return 0, 0
+    
+    if fixed_point is None:
+        # Standard linear regression
+        X = sm.add_constant(hull_x)
+        model = sm.OLS(hull_y, X).fit()
+        slope = model.params[1]
+        intercept = model.params[0]
+    else:
+        # Constrained fit passing through the fixed point
+        if len(hull_x) == 2:
+            # With only two points, just connect them
+            fx, fy = fixed_point
+            other_x = hull_x[0] if hull_x[1] == fx else hull_x[1]
+            other_y = hull_y[0] if hull_y[1] == fy else hull_y[1]
             
-            # Split the original pareto points
-            mask_before = pareto_points[:, 0] <= x0
-            mask_after = pareto_points[:, 0] > x0
-            
-            if sum(mask_before) > 2 and k1 is None:
-                X_before = sm.add_constant(pareto_points[mask_before, 0])
-                model_before = sm.OLS(pareto_points[mask_before, 1], X_before).fit()
-                k1 = model_before.params[1]
-            
-            if sum(mask_after) > 2 and k2 is None:
-                X_after = sm.add_constant(pareto_points[mask_after, 0])
-                model_after = sm.OLS(pareto_points[mask_after, 1], X_after).fit()
-                k2 = model_after.params[1]
-        
-        # If we still don't have slopes, use the raw data
-        if k1 is None or k2 is None:
-            print("Falling back to original data for fitting")
-            
-            # Split all data
-            mask_before = x_sorted <= x0
-            mask_after = x_sorted > x0
-            
-            if sum(mask_before) > 2 and k1 is None:
-                X_before = sm.add_constant(x_sorted[mask_before])
-                model_before = sm.OLS(y_sorted[mask_before], X_before).fit()
-                k1 = model_before.params[1]
-            
-            if sum(mask_after) > 2 and k2 is None:
-                X_after = sm.add_constant(x_sorted[mask_after])
-                model_after = sm.OLS(y_sorted[mask_after], X_after).fit()
-                k2 = model_after.params[1]
-        
-        # Final fallback for slopes
-        if k1 is None:
-            k1 = 0.1  # Default positive slope
-        if k2 is None:
-            k2 = -0.1  # Default negative slope
-        
-        params = [x0, y0, k1, k2]
-        
-        # Combine all pareto points for plotting
-        all_pareto_x = []
-        all_pareto_y = []
-        
-        if pre_pareto is not None and len(pre_pareto) > 0:
-            all_pareto_x.extend(pre_pareto[:, 0])
-            all_pareto_y.extend(pre_pareto[:, 1])
-        
-        if post_pareto is not None and len(post_pareto) > 0:
-            all_pareto_x.extend(post_pareto[:, 0])
-            all_pareto_y.extend(post_pareto[:, 1])
-        
-        if len(all_pareto_x) > 0:
-            return np.array(all_pareto_x), np.array(all_pareto_y), params
+            if other_x == fx:  # Avoid division by zero
+                slope = 0
+            else:
+                slope = (other_y - fy) / (other_x - fx)
+                
+            intercept = fy - slope * fx
         else:
-            return pareto_points[:, 0], pareto_points[:, 1], params
+            # With more points, find the best fit that passes through fixed_point
+            fx, fy = fixed_point
+            
+            # Shift coordinates so fixed point is at origin
+            shifted_x = hull_x - fx
+            shifted_y = hull_y - fy
+            
+            # Fit through origin (no intercept)
+            model = sm.OLS(shifted_y, shifted_x[:, np.newaxis]).fit()
+            slope = model.params[0]
+            
+            # Calculate intercept to pass through fixed point
+            intercept = fy - slope * fx
     
-    # Fallback to simpler approach
-    print("Using fallback approach")
-    
-    # Find maximum y value in original data
-    max_y_idx = np.argmax(y_sorted)
-    x0 = x_sorted[max_y_idx]
-    y0 = y_sorted[max_y_idx]
-    
-    # Simple fit to all data
-    mask_before = x_sorted <= x0
-    mask_after = x_sorted > x0
-    
-    try:
-        if sum(mask_before) > 2:
-            X_before = sm.add_constant(x_sorted[mask_before])
-            model_before = sm.OLS(y_sorted[mask_before], X_before).fit()
-            k1 = model_before.params[1]
-        else:
-            k1 = 0.1
-        
-        if sum(mask_after) > 2:
-            X_after = sm.add_constant(x_sorted[mask_after])
-            model_after = sm.OLS(y_sorted[mask_after], X_after).fit()
-            k2 = model_after.params[1]
-        else:
-            k2 = -0.1
-        
-        params = [x0, y0, k1, k2]
-        return x_sorted, y_sorted, params
-    except Exception as e:
-        print(f"Error in fallback: {e}")
-        return x_sorted, y_sorted, [x0, y0, 0.1, -0.1]  # Hardcoded default
+    return slope, intercept
 
 # Create a color scheme matching the image
 def create_model_dataset_color_scheme():
@@ -353,6 +365,13 @@ def create_plot(x_column, y_column='normalized_brain_score', title=None, save_pa
     # Main plot subplot
     ax_main = plt.subplot(gs[0])
     
+    # Get current axis limits early
+    x_min, x_max = plt.xlim()
+    y_min, y_max = plt.ylim()
+    
+    # Track whether equations have been plotted
+    equations_plotted = False
+    
     # Add human accuracy patch for multi_label_acc plots
     human_accuracy_region = None
     if x_column == 'multi_label_acc':
@@ -375,32 +394,39 @@ def create_plot(x_column, y_column='normalized_brain_score', title=None, save_pa
         )
         ax_main.add_patch(rect)
         
-        # Store the region where "Human accuracy" text will be
-        text_x = (human_acc_min + human_acc_max) / 2
-        text_y = y_max * 0.95
-        human_accuracy_region = {
-            'x': text_x,
-            'y': text_y,
-            'width': (human_acc_max - human_acc_min),
-            'height': 0.05 * (y_max - y_min)  # Approximate text height
-        }
+        # Calculate mean y-value of dots with x > human_acc_min
+        valid_x = x_data[valid_indices]
+        valid_y = y_data[valid_indices]
         
-        # Add text label
-        ax_main.text(
-            text_x,
-            text_y,
-            'Human accuracy',
-            fontsize=8,
-            color='#505050',
-            ha='center',
-            va='top',
-            style='italic',
-            bbox=dict(facecolor='white', alpha=0.7, edgecolor=None, pad=2),
-            zorder=1
-        )
+        # Find dots with x > human_acc_min
+        dots_beyond_threshold = [valid_y[i] for i in range(len(valid_x)) if valid_x[i] > human_acc_min]
+        
+        # Calculate mean if dots exist beyond threshold
+        if dots_beyond_threshold:
+            mean_y_beyond_threshold = sum(dots_beyond_threshold) / len(dots_beyond_threshold)
+        else:
+            mean_y_beyond_threshold = 0
+        
+        # Determine label position based on mean y-value
+        x_label = x_min + 0.05 * (x_max - x_min)  # Always 5% from left edge
+        
+        if mean_y_beyond_threshold > 0.5:
+            # If mean > 0.5, place label at bottom
+            y_label = y_min + 0.05 * (y_max - y_min)  # 5% from bottom
+            va = 'bottom'
+        else:
+            # Otherwise place label at top
+            y_label = y_max - 0.05 * (y_max - y_min)  # 5% from top
+            va = 'top'
+        
+        # Add the Human Accuracy text label
+        plt.text(x_label, y_label, 'Human Accuracy', 
+                fontsize=8, ha='left', va=va, 
+                bbox=dict(facecolor='white', alpha=0.8, edgecolor='none'),
+                zorder=10)
     
     # Replace 'selfsup' with 'SSL' in the joined_df
-    joined_df['model_type_category'] = joined_df['model_type_category'].replace('selfsup', 'SSL')
+    # joined_df['model_type_category'] = joined_df['model_type_category'].replace('selfsup', 'SSL')
     # Update category column to reflect the change
     joined_df['category'] = joined_df['model_type_category'] + ' - ' + joined_df['dataset_category']
     
@@ -415,8 +441,8 @@ def create_plot(x_column, y_column='normalized_brain_score', title=None, save_pa
     }
     
     # Sort categories by model type and dataset type
-    model_type_order = ['CNN', 'ConvViT', 'ViT', 'SSL']
-    dataset_type_order = ['ImageNet-1K', 'Internet-scale vision', 'Internet-scale vision & language', 'Adversarial']
+    model_type_order = ['CNN', 'ConvViT', 'ViT']
+    dataset_type_order = ['ImageNet-1K', 'Internet-scale vision', 'Internet-scale vision & language', 'Adversarially trained']
     
     # Function to get the sort key for a category
     def get_sort_key(category):
@@ -439,11 +465,11 @@ def create_plot(x_column, y_column='normalized_brain_score', title=None, save_pa
                 color=color_dict.get(cat, '#999999'),
                 marker=marker_styles.get(cat_data['vision_or_VLM'].iloc[0], 'o'),
                 alpha=0.8,  
-                s=60,
+                s=25,
                 label=cat,
                 edgecolor='black',  
-                linewidth=0.5,
-                zorder=5
+                linewidth=0.3,
+                zorder=5  # Set zorder for scatter points
             )
     
     # Calculate piecewise linear upper bound
@@ -451,93 +477,271 @@ def create_plot(x_column, y_column='normalized_brain_score', title=None, save_pa
     y_data = joined_df[y_column].values
     valid_indices = ~np.isnan(x_data) & ~np.isnan(y_data)
     
-    # Store the changepoint for later plotting
-    changepoint = None
-    
-    if sum(valid_indices) > 4:
-        _, _, params = compute_piecewise_upper_bound(
+    if sum(valid_indices) > 4:  # Need enough points for a meaningful fit
+        # Compute piecewise fit
+        (pre_slope, pre_intercept), (post_slope, post_intercept), fit_params = compute_piecewise_upper_bound(
             x_data[valid_indices], 
-            y_data[valid_indices],
-            bins=8
+            y_data[valid_indices]
         )
         
-        # If we have valid parameters, add the extended lines and change marker
-        if params is not None:
-            x0, y0, k1, k2 = params
-            x_min, x_max = ax_main.get_xlim()
-            y_min, y_max = ax_main.get_ylim()
+        # Extract parameters
+        change_x, change_y = fit_params['changepoint']
+        
+        # Plot pre-changepoint line - extend all the way across the plot
+        x_pre = np.array([x_min, x_max])
+        y_pre = pre_slope * x_pre + pre_intercept
+        plt.plot(x_pre, y_pre, color='black', alpha=0.4, linestyle='--', linewidth=1.0)
+        
+        # Plot post-changepoint line - extend all the way across the plot
+        x_post = np.array([x_min, x_max])
+        y_post = post_slope * x_post + post_intercept
+        plt.plot(x_post, y_post, color='black', alpha=0.4, linestyle='--', linewidth=1.0)
+        
+        # Format equations and plot ONLY ONCE in the top left corner
+        if not equations_plotted:
+            eq1 = f"y = {pre_slope:.3f}x + {pre_intercept:.3f}"
+            eq2 = f"y = {post_slope:.3f}x + {post_intercept:.3f}"
             
-            # Calculate intercepts for the equation display
-            b1 = y0 - k1 * x0  # y = k1*x + b1
-            b2 = y0 - k2 * x0  # y = k2*x + b2
+            # Place equations in the top left corner
+            eq_x = x_min + 0.05 * (x_max - x_min)  # 5% from left edge
+            eq_y = y_max - 0.05 * (y_max - y_min)  # 5% from top edge
             
-            # Extend first segment across x-axis
-            x_pre = np.array([x_min, x_max])
-            y_pre = y0 + k1 * (x_pre - x0)
-            ax_main.plot(x_pre, y_pre, color='black', alpha=0.7, linestyle='--', linewidth=2.0)
+            plt.text(eq_x, eq_y, 
+                    f"Pre-threshold: {eq1}\nPost-threshold: {eq2}", 
+                    fontsize=8,
+                    ha='left', va='top',
+                    bbox=dict(facecolor='white', alpha=1.0, edgecolor='#CCCCCC', boxstyle='round,pad=0.5'),
+                    zorder=10)
             
-            # Extend second segment across x-axis
-            x_post = np.array([x_min, x_max])
-            y_post = y0 + k2 * (x_post - x0)
-            ax_main.plot(x_post, y_post, color='black', alpha=0.7, linestyle='--', linewidth=2.0)
+            equations_plotted = True
+        
+        # Determine positions for all annotations
+        from matplotlib.patches import ConnectionPatch
+        
+        valid_x = x_data[valid_indices]
+        valid_y = y_data[valid_indices]
+        valid_models = joined_df.iloc[valid_indices].reset_index(drop=True)
+        
+        # Find model closest to changepoint
+        distances_to_changepoint = np.sqrt((valid_x - change_x)**2 + (valid_y - change_y)**2)
+        changepoint_model_idx = np.argmin(distances_to_changepoint)
+        
+        # Find model at far left
+        leftmost_idx = np.argmin(valid_x)
+        
+        # Find model at far right
+        rightmost_idx = np.argmax(valid_x)
+        
+        # Get model names
+        possible_name_cols = ['model_name', 'name', 'meta_name', 'model', 'model_id']
+        model_name_col = None
+        
+        for col in possible_name_cols:
+            if col in valid_models.columns:
+                model_name_col = col
+                break
+                
+        if model_name_col is None:
+            changepoint_model_name = "Changepoint Model"
+            leftmost_model_name = "Leftmost Model"
+            rightmost_model_name = "Rightmost Model"
+        else:
+            def get_short_name(full_name):
+                if '/' in str(full_name):
+                    parts = str(full_name).split('/')
+                    return parts[-1]
+                else:
+                    name = str(full_name)
+                    if len(name) > 20:
+                        return name[:17] + "..."
+                    return name
             
-            # Place white dot with black border at the change point
-            ax_main.plot(x0, y0, marker='o', markersize=10, 
-                    markerfacecolor='white', markeredgecolor='black', 
-                    markeredgewidth=1.5, alpha=1.0, zorder=20)
+            changepoint_model_name = get_short_name(valid_models.iloc[changepoint_model_idx][model_name_col])
+            leftmost_model_name = get_short_name(valid_models.iloc[leftmost_idx][model_name_col])
+            rightmost_model_name = get_short_name(valid_models.iloc[rightmost_idx][model_name_col])
+        
+        # Function to find clear space for text labels
+        def find_clear_space(x, y, data_x, data_y, radius=0.15):
+            angles = [0, np.pi/6, np.pi/3, np.pi/2, 2*np.pi/3, 5*np.pi/6, np.pi, 
+                     7*np.pi/6, 4*np.pi/3, 3*np.pi/2, 5*np.pi/3, 11*np.pi/6]
             
-            # Add equations in the top-right corner
-            # Format the equations with 2 decimal places
-            eq1 = f"y = {k1:.2f}x + {b1:.2f}"
-            eq2 = f"y = {k2:.2f}x + {b2:.2f}"
+            best_angle = angles[0]
+            min_nearby = float('inf')
             
-            # Add a text box with both equations
-            equation_text = f"Pre-threshold: {eq1}\nPost-threshold: {eq2}"
+            for angle in angles:
+                pos_x = x + radius * np.cos(angle)
+                pos_y = y + radius * np.sin(angle)
+                
+                margin = 0.05 * (y_max - y_min)
+                if (pos_x < x_min + margin or pos_x > x_max - margin or 
+                    pos_y < y_min + margin or pos_y > y_max - margin):
+                    continue
+                
+                dx = data_x - pos_x
+                dy = data_y - pos_y
+                distances = np.sqrt(dx**2 + dy**2)
+                nearby = np.sum(distances < 0.05 * (x_max - x_min))
+                
+                if nearby < min_nearby:
+                    min_nearby = nearby
+                    best_angle = angle
             
-            # Place in top-right corner with a white background
-            ax_main.text(
-                0.98, 0.98, 
-                equation_text,
-                transform=ax_main.transAxes,
+            if min_nearby == float('inf'):
+                best_angle = np.pi/4
+                pos_x = min(max(x + radius * np.cos(best_angle), x_min + margin), x_max - margin)
+                pos_y = min(max(y + radius * np.sin(best_angle), y_min + margin), y_max - margin)
+            else:
+                pos_x = x + radius * np.cos(best_angle)
+                pos_y = y + radius * np.sin(best_angle)
+            
+            return pos_x, pos_y, best_angle
+        
+        # Helper function to adjust arrow endpoint to be very close to the dot's center
+        def adjust_endpoint(start_x, start_y, end_x, end_y, marker_radius=0.005):
+            """
+            Calculate an endpoint that's along the line from start to end,
+            but stops just short of the end point (dot center)
+            """
+            # Calculate the direction vector from text to dot center
+            dx, dy = end_x - start_x, end_y - start_y
+            distance = np.sqrt(dx**2 + dy**2)
+            
+            if distance < marker_radius:  # If already too close
+                return end_x, end_y
+                
+            # Normalize the direction vector
+            dx, dy = dx/distance, dy/distance
+            
+            # Move very close to the dot center along the direct line
+            # Only a tiny gap to prevent exact overlap
+            adjusted_end_x = end_x - dx * marker_radius
+            adjusted_end_y = end_y - dy * marker_radius
+            
+            return adjusted_end_x, adjusted_end_y
+        
+        # Collect all annotation positions for later use
+        cp_x, cp_y = valid_x[changepoint_model_idx], valid_y[changepoint_model_idx]
+        cp_text_x, cp_text_y, _ = find_clear_space(cp_x, cp_y, valid_x, valid_y, radius=0.15)
+        
+        left_x, left_y = valid_x[leftmost_idx], valid_y[leftmost_idx]
+        left_text_x, left_text_y, _ = find_clear_space(left_x, left_y, valid_x, valid_y, radius=0.15)
+        
+        right_x, right_y = valid_x[rightmost_idx], valid_y[rightmost_idx]
+        right_text_x, right_text_y, _ = find_clear_space(right_x, right_y, valid_x, valid_y, radius=0.15)
+        
+        # Calculate appropriate marker distance - very small to get arrows close to dot centers
+        x_range = x_max - x_min
+        y_range = y_max - y_min
+        plot_scale = np.sqrt(x_range**2 + y_range**2)
+        marker_distance = plot_scale * 0.003  # Very small offset - just 0.3% of plot diagonal
+        
+        # Find position for equation text that doesn't overlap with annotations
+        def is_overlapping(x, y, width, height, points, min_distance=0.1):
+            for px, py in points:
+                if (abs(x - px) < width/2 + min_distance and 
+                    abs(y - py) < height/2 + min_distance):
+                    return True
+            return False
+        
+        # Calculate width and height of equation text box (approximate)
+        eq_width = 0.25 * (x_max - x_min)
+        eq_height = 0.1 * (y_max - y_min)
+        
+        # Define potential positions for equation text
+        eq_positions = [
+            (x_min + 0.85*(x_max - x_min), y_min + 0.85*(y_max - y_min), 'right', 'top'),
+            (x_min + 0.15*(x_max - x_min), y_min + 0.85*(y_max - y_min), 'left', 'top'),
+            (x_min + 0.85*(x_max - x_min), y_min + 0.15*(y_max - y_min), 'right', 'bottom'),
+            (x_min + 0.15*(x_max - x_min), y_min + 0.15*(y_max - y_min), 'left', 'bottom'),
+            (x_min + 0.5*(x_max - x_min), y_min + 0.85*(y_max - y_min), 'center', 'top'),
+            (x_min + 0.5*(x_max - x_min), y_min + 0.15*(y_max - y_min), 'center', 'bottom')
+        ]
+        
+        # Points to avoid
+        annotation_points = [
+            (cp_text_x, cp_text_y),
+            (left_text_x, left_text_y),
+            (right_text_x, right_text_y),
+            (change_x, change_y)
+        ]
+        
+        # Find position that doesn't overlap
+        eq_x, eq_y, eq_ha, eq_va = eq_positions[0]
+        for pos_x, pos_y, ha, va in eq_positions:
+            if not is_overlapping(pos_x, pos_y, eq_width, eq_height, annotation_points):
+                eq_x, eq_y, eq_ha, eq_va = pos_x, pos_y, ha, va
+                break
+        
+        # Place equations in a text box at the non-overlapping position
+        plt.text(eq_x, eq_y, 
+                f"Pre-threshold: {eq1}\nPost-threshold: {eq2}", 
                 fontsize=8,
-                verticalalignment='top',
-                horizontalalignment='right',
-                bbox=dict(boxstyle='round', facecolor='white', alpha=0.9, edgecolor='#CCCCCC')
-            )
-            
-            # Also add equations near the lines themselves
-            # For the pre-threshold line - place near the middle of the line
-            pre_x = x_min + (x0 - x_min) / 2
-            pre_y = b1 + k1 * pre_x
-            
-            # Adjust position based on slope to avoid overlapping
-            y_offset = 0.05 * (y_max - y_min)
-            pre_y += y_offset if k1 < 0 else -y_offset
-            
-            ax_main.text(
-                pre_x, pre_y,
-                eq1,
-                fontsize=8,
-                verticalalignment='bottom' if k1 < 0 else 'top',
-                horizontalalignment='center',
-                bbox=dict(boxstyle='round', facecolor='white', alpha=0.9, edgecolor=None, pad=0.2)
-            )
-            
-            # For the post-threshold line - place near the middle of the visible part
-            post_x = x0 + (x_max - x0) / 2
-            post_y = b2 + k2 * post_x
-            
-            # Adjust position based on slope to avoid overlapping
-            post_y += y_offset if k2 < 0 else -y_offset
-            
-            ax_main.text(
-                post_x, post_y,
-                eq2,
-                fontsize=8,
-                verticalalignment='bottom' if k2 < 0 else 'top',
-                horizontalalignment='center',
-                bbox=dict(boxstyle='round', facecolor='white', alpha=0.9, edgecolor=None, pad=0.2)
-            )
+                ha=eq_ha, va=eq_va,
+                bbox=dict(facecolor='white', alpha=1.0, edgecolor='#CCCCCC', boxstyle='round,pad=0.5'),
+                zorder=10)
+        
+        # Add annotation for changepoint model with adjusted endpoint
+        adjusted_cp_x, adjusted_cp_y = adjust_endpoint(
+            cp_text_x, cp_text_y, cp_x, cp_y, marker_distance)
+        
+        con = ConnectionPatch(
+            xyA=(cp_text_x, cp_text_y),
+            xyB=(adjusted_cp_x, adjusted_cp_y),
+            coordsA="data", coordsB="data",
+            arrowstyle="-|>", 
+            color="black",
+            connectionstyle=f"arc3,rad={0.2}",  # Reduced curvature
+            linewidth=1,
+            zorder=11
+        )
+        plt.gca().add_artist(con)
+        
+        plt.text(cp_text_x, cp_text_y, changepoint_model_name, fontsize=8,
+                ha='center', va='center',
+                bbox=dict(facecolor='white', alpha=0.8, edgecolor='black', boxstyle='round,pad=0.3'),
+                zorder=12)
+        
+        # Add annotation for leftmost model with adjusted endpoint
+        adjusted_left_x, adjusted_left_y = adjust_endpoint(
+            left_text_x, left_text_y, left_x, left_y, marker_distance)
+        
+        con = ConnectionPatch(
+            xyA=(left_text_x, left_text_y),
+            xyB=(adjusted_left_x, adjusted_left_y),
+            coordsA="data", coordsB="data",
+            arrowstyle="-|>", 
+            color="black",
+            connectionstyle=f"arc3,rad={-0.2}",  # Reduced curvature
+            linewidth=1,
+            zorder=11
+        )
+        plt.gca().add_artist(con)
+        
+        plt.text(left_text_x, left_text_y, leftmost_model_name, fontsize=8,
+                ha='center', va='center',
+                bbox=dict(facecolor='white', alpha=0.8, edgecolor='black', boxstyle='round,pad=0.3'),
+                zorder=12)
+        
+        # Add annotation for rightmost model with adjusted endpoint
+        adjusted_right_x, adjusted_right_y = adjust_endpoint(
+            right_text_x, right_text_y, right_x, right_y, marker_distance)
+        
+        con = ConnectionPatch(
+            xyA=(right_text_x, right_text_y),
+            xyB=(adjusted_right_x, adjusted_right_y),
+            coordsA="data", coordsB="data",
+            arrowstyle="-|>", 
+            color="black",
+            connectionstyle=f"arc3,rad={0.2}",  # Reduced curvature
+            linewidth=1,
+            zorder=11
+        )
+        plt.gca().add_artist(con)
+        
+        plt.text(right_text_x, right_text_y, rightmost_model_name, fontsize=8,
+                ha='center', va='center',
+                bbox=dict(facecolor='white', alpha=0.8, edgecolor='black', boxstyle='round,pad=0.3'),
+                zorder=12)
     
     # Set labels and style for main plot
     if title and ' vs ' in title:
@@ -557,226 +761,6 @@ def create_plot(x_column, y_column='normalized_brain_score', title=None, save_pa
     
     if ylim is not None:
         ax_main.set_ylim(ylim)
-    
-    # Plot the changepoint LAST to ensure it's on top
-    if changepoint:
-        x0, y0 = changepoint
-        # # Add a highlight circle behind the marker
-        # ax_main.plot(x0, y0, marker='o', markersize=16, 
-        #             markerfacecolor='none', markeredgecolor='#FF4500', 
-        #             markeredgewidth=2.0, alpha=0.7, zorder=19)
-        # Add the white dot with black border
-        ax_main.plot(x0, y0, marker='o', markersize=10, 
-                    markerfacecolor='white', markeredgecolor='black', 
-                    markeredgewidth=1.5, alpha=1.0, zorder=20)
-    
-    if annotate_outliers:
-        # Get all valid data points
-        valid_data = joined_df[~joined_df[x_column].isna() & ~joined_df[y_column].isna()].copy()
-        
-        if len(valid_data) > 0:
-            # Get current axis limits
-            x_min, x_max = ax_main.get_xlim()
-            y_min, y_max = ax_main.get_ylim()
-            x_range = x_max - x_min
-            y_range = y_max - y_min
-            
-            # Find models at the extremes and strategic positions
-            max_x_model = valid_data.loc[valid_data[x_column].idxmax()]
-            max_y_model = valid_data.loc[valid_data[y_column].idxmax()]
-            
-            # Find mid-range models
-            x_25 = valid_data[x_column].quantile(0.25)
-            x_75 = valid_data[x_column].quantile(0.75)
-            mid_x_high_y = valid_data[
-                (valid_data[x_column] >= x_25) & 
-                (valid_data[x_column] <= x_75)
-            ].sort_values(y_column, ascending=False).head(1)
-            
-            y_25 = valid_data[y_column].quantile(0.25)
-            y_75 = valid_data[y_column].quantile(0.75)
-            mid_y_high_x = valid_data[
-                (valid_data[y_column] >= y_25) & 
-                (valid_data[y_column] <= y_75)
-            ].sort_values(x_column, ascending=False).head(1)
-            
-            # Combine selected models
-            selected_models = pd.concat([
-                pd.DataFrame([max_x_model]),
-                pd.DataFrame([max_y_model]),
-                mid_x_high_y,
-                mid_y_high_x
-            ]).drop_duplicates()
-            
-            # Convert all data points to numpy array for distance calculations
-            all_points = np.array(list(zip(valid_data[x_column], valid_data[y_column])))
-            
-            # Track used positions
-            used_positions = []
-            
-            # Function to find nearest white space
-            def find_nearest_white_space(x, y, all_points, used_positions):
-                # First try: Look for ideal white space
-                min_dist_to_points = 0.1 * np.sqrt(x_range**2 + y_range**2)
-                min_dist_to_labels = 0.15 * np.sqrt(x_range**2 + y_range**2)
-                
-                best_pos = None
-                min_dist = float('inf')
-                
-                # First attempt with strict spacing requirements
-                for distance in np.linspace(0.1, 0.3, 5) * np.sqrt(x_range**2 + y_range**2):
-                    for angle in np.linspace(0, 2*np.pi, 16):
-                        dx = distance * np.cos(angle)
-                        dy = distance * np.sin(angle)
-                        new_x = x + dx
-                        new_y = y + dy
-                        
-                        # Check if position is within plot bounds with padding
-                        padding = 0.05 * min(x_range, y_range)
-                        if (new_x < x_min + padding or new_x > x_max - padding or 
-                            new_y < y_min + padding or new_y > y_max - padding):
-                            continue
-                        
-                        # Check distance to all points
-                        point_dists = np.sqrt(np.sum((all_points - [new_x, new_y])**2, axis=1))
-                        if np.min(point_dists) < min_dist_to_points:
-                            continue
-                        
-                        # Check distance to used label positions
-                        if any(np.sqrt((new_x - ux)**2 + (new_y - uy)**2) < min_dist_to_labels 
-                              for ux, uy in used_positions):
-                            continue
-                        
-                        # Special check for Human Accuracy label region
-                        if human_accuracy_region is not None:
-                            # Check if potential position overlaps with human accuracy region
-                            if (abs(new_x - human_accuracy_region['x']) < human_accuracy_region['width']/2 and
-                                abs(new_y - human_accuracy_region['y']) < human_accuracy_region['height']):
-                                continue
-                        
-                        total_dist = np.sqrt(dx**2 + dy**2)
-                        if total_dist < min_dist:
-                            min_dist = total_dist
-                            best_pos = (new_x, new_y)
-                
-                # If first attempt failed, try again with relaxed constraints
-                if best_pos is None:
-                    print("First attempt failed, trying with relaxed constraints...")
-                    min_dist_to_points *= 0.5  # Reduce minimum distance requirements
-                    min_dist_to_labels *= 0.5
-                    
-                    for distance in np.linspace(0.1, 0.4, 8) * np.sqrt(x_range**2 + y_range**2):
-                        for angle in np.linspace(0, 2*np.pi, 24):  # More angles to try
-                            dx = distance * np.cos(angle)
-                            dy = distance * np.sin(angle)
-                            new_x = x + dx
-                            new_y = y + dy
-                            
-                            # Check if position is within plot bounds with minimal padding
-                            padding = 0.02 * min(x_range, y_range)  # Reduced padding
-                            if (new_x < x_min + padding or new_x > x_max - padding or 
-                                new_y < y_min + padding or new_y > y_max - padding):
-                                continue
-                            
-                            # Relaxed checks for point distances
-                            point_dists = np.sqrt(np.sum((all_points - [new_x, new_y])**2, axis=1))
-                            if np.min(point_dists) < min_dist_to_points:
-                                continue
-                            
-                            # Relaxed checks for label distances
-                            if any(np.sqrt((new_x - ux)**2 + (new_y - uy)**2) < min_dist_to_labels 
-                                for ux, uy in used_positions):
-                                continue
-                            
-                            # Still maintain strict check for Human Accuracy region
-                            if human_accuracy_region is not None:
-                                if (abs(new_x - human_accuracy_region['x']) < human_accuracy_region['width']/2 and
-                                    abs(new_y - human_accuracy_region['y']) < human_accuracy_region['height']):
-                                    continue
-                            
-                            total_dist = np.sqrt(dx**2 + dy**2)
-                            if total_dist < min_dist:
-                                min_dist = total_dist
-                                best_pos = (new_x, new_y)
-                
-                # If still no solution, use absolute fallback
-                if best_pos is None:
-                    print("Using fallback position...")
-                    # Try corners in order: top-right, top-left, bottom-right, bottom-left
-                    corners = [
-                        (x_max - 0.05 * x_range, y_max - 0.05 * y_range),
-                        (x_min + 0.05 * x_range, y_max - 0.05 * y_range),
-                        (x_max - 0.05 * x_range, y_min + 0.05 * y_range),
-                        (x_min + 0.05 * x_range, y_min + 0.05 * y_range)
-                    ]
-                    
-                    for corner in corners:
-                        if not any(np.sqrt((corner[0] - ux)**2 + (corner[1] - uy)**2) < 0.1 * min(x_range, y_range)
-                                for ux, uy in used_positions):
-                            best_pos = corner
-                            break
-                    
-                    # If even corners fail, use absolute position
-                    if best_pos is None:
-                        best_pos = (x_max - 0.02 * x_range, y_max - 0.02 * y_range)
-                
-                return best_pos
-            
-            # Add annotations for each selected model
-            for idx, row in selected_models.iterrows():
-                model_name = row['model']
-                x_pos = row[x_column]
-                y_pos = row[y_column]
-                
-                # Find nearest white space
-                label_pos = find_nearest_white_space(x_pos, y_pos, all_points, used_positions)
-                
-                if label_pos is None:
-                    continue  # Skip if no suitable position found
-                
-                # Calculate arrow curvature based on distance
-                dx = label_pos[0] - x_pos
-                dy = label_pos[1] - y_pos
-                distance = np.sqrt(dx**2 + dy**2)
-                rad = min(0.2, distance / (x_range + y_range))  # Scale curvature with distance
-                
-                # Determine text alignment based on label position relative to point
-                ha = 'right' if label_pos[0] < x_pos else 'left'
-                va = 'top' if label_pos[1] < y_pos else 'bottom'
-                
-                # Create annotation with curved arrow
-                ax_main.annotate(
-                    model_name,
-                    xy=(x_pos, y_pos),
-                    xytext=label_pos,
-                    xycoords='data',
-                    textcoords='data',
-                    ha=ha,
-                    va=va,
-                    fontsize=8,
-                    color='#333333',
-                    bbox=dict(
-                        boxstyle='round,pad=0.5',  # Increased padding
-                        fc='white',
-                        alpha=1.0,    # Fully opaque background
-                        ec='#CCCCCC',
-                        zorder=100    # Ensure box is on top
-                    ),
-                    arrowprops=dict(
-                        arrowstyle='->',
-                        connectionstyle=f'arc3,rad={rad}',
-                        color='#333333',
-                        alpha=0.7,
-                        shrinkA=0,
-                        shrinkB=5,
-                        mutation_scale=15,
-                        linewidth=2,
-                        zorder=100
-                    ),
-                    zorder=100
-                )
-                
-                used_positions.append(label_pos)
     
     # Legend subplot
     ax_legend = plt.subplot(gs[1])
@@ -896,7 +880,6 @@ clickme_alignment.loc[clickme_alignment.type2 == "big_data", "type2"] = "Interne
 clickme_alignment.loc[clickme_alignment.type2 == "clip", "type2"] = "Internet-scale vision & language"
 clickme_alignment = clickme_alignment.rename(columns={'type2': 'dataset_category'})
 
-# Change selfsup to SSL
 # clickme_alignment.loc[clickme_alignment.model_type_category == 'selfsup', 'model_type_category'] = 'SSL'
 clickme_alignment.loc[clickme_alignment.model_type_category == 'selfsup', 'model_type_category'] = 'ViT'
 # Join the dataframes and track models lost at each step
@@ -973,12 +956,12 @@ if plot_data:
     #         save_path=os.path.join(output_dir, 'multi_label_acc_vs_brain.png'),
     #         ylim=(0, 1))
     
-    # # Then create annotated versions
-    # create_plot('multi_label_acc', 
-    #         title='Brain Score vs Multi-label Accuracy', 
-    #         save_path=os.path.join(output_dir, 'multi_label_acc_vs_brain_annotated.png'),
-    #         ylim=(0, 1),
-    #         annotate_outliers=True)
+    # Then create annotated versions
+    create_plot('multi_label_acc', 
+            title='Brain Score vs Multi-label Accuracy', 
+            save_path=os.path.join(output_dir, 'multi_label_acc_vs_brain_annotated.png'),
+            ylim=(0, 1),
+            annotate_outliers=True)
     
     # # Repeat for other plots
     # create_plot('multi_label_acc', 
@@ -987,71 +970,66 @@ if plot_data:
     #         save_path=os.path.join(output_dir, 'multi_label_acc_vs_clickme.png'),
     #         ylim=(-0.3, 1))
     
-    # create_plot('multi_label_acc', 
-    #         y_column='spearman',
-    #         title='ClickMe vs Multi-label Accuracy', 
-    #         save_path=os.path.join(output_dir, 'multi_label_acc_vs_clickme_annotated.png'),
-    #         ylim=(-0.3, 1),
-    #         annotate_outliers=True)
+    create_plot('multi_label_acc', 
+            y_column='spearman',
+            title='ClickMe vs Multi-label Accuracy', 
+            save_path=os.path.join(output_dir, 'multi_label_acc_vs_clickme_annotated.png'),
+            ylim=(-0.3, 1),
+            annotate_outliers=True)
 
     # create_plot('results_imagenet', 
     #         title='Brain Score vs ImageNet Accuracy', 
     #         save_path=os.path.join(output_dir, 'imagenet_vs_brain.png'),
     #         ylim=(-0.3, 1),
-    #         y_column='spearman',
-    #         annotate_outliers=True)
-    # create_plot('results_imagenet',
-    #         y_column='spearman',
-    #         title='Brain Score vs ImageNet Accuracy', 
-    #         save_path=os.path.join(output_dir, 'imagenet_vs_brain_annotated.png'),
-    #         ylim=(-0.3, 1),
-    #         annotate_outliers=True)
+    #         y_column='spearman')
+    create_plot('results_imagenet',
+            y_column='spearman',
+            title='Brain Score vs ImageNet Accuracy', 
+            save_path=os.path.join(output_dir, 'imagenet_vs_brain_annotated.png'),
+            ylim=(-0.3, 1),
+            annotate_outliers=True)
 
     # create_plot('results_sketch', 
     #         title='Brain Score vs Sketch Accuracy', 
     #         save_path=os.path.join(output_dir, 'sketch_vs_brain.png'),
     #         ylim=(-0.3, 1),
-    #         y_column='spearman',
-    #         annotate_outliers=True)
-    # create_plot('results_sketch', 
-    #         y_column='spearman',
-    #         title='Brain Score vs Sketch Accuracy', 
-    #         save_path=os.path.join(output_dir, 'sketch_vs_brain_annotated.png'),
-    #         ylim=(-0.3, 1),
-    #         annotate_outliers=True)
+    #         y_column='spearman')
+    create_plot('results_sketch', 
+            y_column='spearman',
+            title='Brain Score vs Sketch Accuracy', 
+            save_path=os.path.join(output_dir, 'sketch_vs_brain_annotated.png'),
+            ylim=(-0.3, 1),
+            annotate_outliers=True)
 
     # create_plot('results_imagenetv2_matched_frequency', 
     #         title='Brain Score vs ImageNetV2 Accuracy', 
     #         save_path=os.path.join(output_dir, 'imagenetv2_vs_brain.png'),
     #         ylim=(-0.3, 1),
-    #         y_column='spearman',
-    #         annotate_outliers=True)
-    # create_plot('results_imagenetv2_matched_frequency', 
-    #         y_column='spearman',
-    #         title='Brain Score vs ImageNetV2 Accuracy', 
-    #         save_path=os.path.join(output_dir, 'imagenetv2_vs_brain_annotated.png'),
-    #         ylim=(-0.3, 1),
-    #         annotate_outliers=True)
+    #         y_column='spearman')
+    create_plot('results_imagenetv2_matched_frequency', 
+            y_column='spearman',
+            title='Brain Score vs ImageNetV2 Accuracy', 
+            save_path=os.path.join(output_dir, 'imagenetv2_vs_brain_annotated.png'),
+            ylim=(-0.3, 1),
+            annotate_outliers=True)
 
     # create_plot('results_imagenet_r', 
     #         title='Brain Score vs ImageNet-R Accuracy', 
     #         save_path=os.path.join(output_dir, 'imagenet_r_vs_brain.png'),
     #         ylim=(-0.3, 1),
-    #         y_column='spearman',
-    #         annotate_outliers=True)
-    # create_plot('results_imagenet_r', 
-    #         y_column='spearman',
-    #         title='Brain Score vs ImageNet-R Accuracy', 
-    #         save_path=os.path.join(output_dir, 'imagenet_r_vs_brain_annotated.png'),
-    #         ylim=(-0.3, 1),
-    #         annotate_outliers=True)
-
-    create_plot('results_imagenet_a', 
-            title='Brain Score vs ImageNet-A Accuracy', 
-            save_path=os.path.join(output_dir, 'imagenet_a_vs_brain.png'),
-            ylim=(-0.3, 1),
+    #         y_column='spearman')
+    create_plot('results_imagenet_r', 
             y_column='spearman',
+            title='Brain Score vs ImageNet-R Accuracy', 
+            save_path=os.path.join(output_dir, 'imagenet_r_vs_brain_annotated.png'),
+            ylim=(-0.3, 1),
             annotate_outliers=True)
+
+    # create_plot('results_imagenet_a', 
+    #         title='Brain Score vs ImageNet-A Accuracy', 
+    #         save_path=os.path.join(output_dir, 'imagenet_a_vs_brain.png'),
+    #         ylim=(-0.3, 1),
+    #         y_column='spearman')
     create_plot('results_imagenet_a', 
             y_column='spearman',
             title='Brain Score vs ImageNet-A Accuracy', 
@@ -1126,11 +1104,10 @@ for dv in dependent_variables:
         if sum(valid_indices) > 4:
             _, _, params = compute_piecewise_upper_bound(
                 x_data[valid_indices], 
-                y_data[valid_indices],
-                bins=8
+                y_data[valid_indices]
             )
             if params is not None:
-                changepoint_x = params[0]  # x0 from the params
+                changepoint_x = params['changepoint'][0]  # x0 from the params
                 print(f"Computed changepoint for {dv}: {changepoint_x}")
     
     # Create data subsets based on changepoint
