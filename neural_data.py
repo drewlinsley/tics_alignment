@@ -15,7 +15,6 @@ from scipy.optimize import curve_fit
 import colorsys
 from sklearn.linear_model import RANSACRegressor
 from matplotlib.patches import ConnectionPatch
-from matplotlib.colors import LinearSegmentedColormap
 
 
 plot_data = True
@@ -800,8 +799,8 @@ joined_df['dataset_category'] = joined_df['full_model'].apply(categorize_trainin
 language_model_indicators = ['clip', 'openai', 'laion2b']
 language_mask = joined_df['full_model'].str.lower().apply(
     lambda x: any(indicator in x for indicator in language_model_indicators)
-joined_df["vision_or_VLM"] = joined_df["dataset_category"].apply(lambda x: "vision" if "language" not in x else "VLM")
 )
+joined_df["vision_or_VLM"] = joined_df["dataset_category"].apply(lambda x: "vision" if "language" not in x else "VLM")
 joined_df.loc[language_mask, 'dataset_category'] = "Internet-scale vision & language"
 
 lost_models = set(joined_df["model"].iloc[joined_df.index.isin(range(pre_merge_count))]) - set(joined_df['model'])
@@ -973,197 +972,209 @@ os.makedirs(anova_dir, exist_ok=True)
 # Initialize a DataFrame to store ANOVA results for reporting
 all_anova_results = []  # pd.DataFrame(columns=['Dependent_Variable', 'Predictor', 'F_Value', 'p_Value', 'R_Squared'])
 
-# Create a function to run the ANOVAs and generate the heatmap
-def run_anova_with_heatmap(joined_df, independent_variables, dependent_variables, anova_dir):
-    # Dictionary to store results for heatmap
-    heatmap_results = {}
+# Run ANOVA analyses for each dependent variable
+for dv in dependent_variables:
+    print(f"\nAnalyzing {dv}...")
     
-    # For each dependent variable
-    for y_column in dependent_variables:
-        # Create a nested dictionary for this dependent variable
-        heatmap_results[y_column] = {}
+    # Filter out rows with missing values for this dependent variable
+    df_filtered = joined_df[~joined_df[dv].isna()].copy()
+    
+    if len(df_filtered) < 5:
+        print(f"Not enough data for {dv}, skipping...")
+        continue
+    
+    # Use the stored changepoint if available
+    y_column = 'normalized_brain_score' if dv != 'normalized_brain_score' else 'spearman'
+    key = f"{dv}_{y_column}"
+    
+    changepoint_x = None
+    if key in changepoint_cache:
+        changepoint_x = changepoint_cache[key]
+        print(f"Using cached changepoint for {dv}: {changepoint_x}")
+    else:
+        # Compute the changepoint if not already stored
+        x_data = df_filtered[dv].values
+        y_data = df_filtered[y_column].values
+        valid_indices = ~np.isnan(x_data) & ~np.isnan(y_data)
         
-        # For each independent variable
-        for x_column in independent_variables:
-            print(f"\nAnalyzing {y_column} vs {x_column}")
-            
-            # Create a filtered dataframe with non-null values for this pair
-            analysis_df = joined_df.dropna(subset=[x_column, y_column])
-            
-            # Get cached changepoint or compute it
-            cache_key = f"{x_column}_{y_column}"
-            
-            if cache_key in changepoint_cache:
-                changepoint_x = changepoint_cache[cache_key]
-                print(f"Using cached changepoint at x = {changepoint_x:.4f}")
-            else:
-                # Compute changepoint if not cached
-                valid_x = analysis_df[x_column].values
-                valid_y = analysis_df[y_column].values
-                
-                if len(valid_x) > 4:
-                    (_, _), (_, _), fit_params = compute_piecewise_upper_bound(valid_x, valid_y)
-                    changepoint_x = fit_params['changepoint'][0]
-                    print(f"Computed changepoint at x = {changepoint_x:.4f}")
-                else:
-                    print("Not enough data for changepoint detection. Using median x-value.")
-                    changepoint_x = np.median(valid_x)
-            
-            # Split data into pre and post changepoint
-            pre_df = analysis_df[analysis_df[x_column] <= changepoint_x]
-            post_df = analysis_df[analysis_df[x_column] > changepoint_x]
-            
-            print(f"Pre-changepoint: {len(pre_df)} samples")
-            print(f"Post-changepoint: {len(post_df)} samples")
-            
-            # Run ANOVA for pre-changepoint
-            pre_results = {}
-            if len(pre_df) > 10:
-                # Run your existing ANOVA analysis on pre_df
-                # Example using statsmodels:
-                import statsmodels.formula.api as smf
-                
-                # Adjust the formula based on your actual predictor variables
-                formula = f"{y_column} ~ {x_column}"
-                pre_model = smf.ols(formula, data=pre_df).fit()
-                
-                # Extract coefficients and p-values
-                pre_coef = pre_model.params[x_column]
-                pre_pval = pre_model.pvalues[x_column]
-                
-                pre_results = {
-                    'coef': pre_coef,
-                    'pval': pre_pval,
-                    'significant': pre_pval < 0.05
-                }
-            else:
-                pre_results = {
-                    'coef': np.nan,
-                    'pval': np.nan,
-                    'significant': False
-                }
-            
-            # Run ANOVA for post-changepoint
-            post_results = {}
-            if len(post_df) > 10:
-                # Run your existing ANOVA analysis on post_df
-                # Example using statsmodels:
-                formula = f"{y_column} ~ {x_column}"
-                post_model = smf.ols(formula, data=post_df).fit()
-                
-                # Extract coefficients and p-values
-                post_coef = post_model.params[x_column]
-                post_pval = post_model.pvalues[x_column]
-                
-                post_results = {
-                    'coef': post_coef,
-                    'pval': post_pval,
-                    'significant': post_pval < 0.05
-                }
-            else:
-                post_results = {
-                    'coef': np.nan,
-                    'pval': np.nan,
-                    'significant': False
-                }
-            
-            # Store results for heatmap
-            heatmap_results[y_column][x_column] = {
-                'pre': pre_results,
-                'post': post_results
-            }
+        if sum(valid_indices) > 4:
+            _, _, params = compute_piecewise_upper_bound(
+                x_data[valid_indices], 
+                y_data[valid_indices]
+            )
+            if params is not None:
+                changepoint_x = params['changepoint'][0]  # x0 from the params
+                print(f"Computed changepoint for {dv}: {changepoint_x}")
     
-    # Create heatmaps for each dependent variable
-    for y_column in dependent_variables:
-        plot_coefficient_heatmap(heatmap_results[y_column], y_column, anova_dir)
-
-def plot_coefficient_heatmap(results_dict, dependent_var, save_dir):
-    """
-    Create a heatmap showing pre and post coefficients side by side.
-    
-    Args:
-        results_dict: Dictionary containing pre/post results for each predictor
-        dependent_var: Name of the dependent variable
-        save_dir: Directory to save the plots
-    """
-    # Create DataFrames for coefficients and p-values
-    predictors = list(results_dict.keys())
-    
-    # Initialize empty arrays
-    pre_coefs = []
-    pre_pvals = []
-    post_coefs = []
-    post_pvals = []
-    
-    # Fill arrays with data
-    for predictor in predictors:
-        pre_coefs.append(results_dict[predictor]['pre']['coef'])
-        pre_pvals.append(results_dict[predictor]['pre']['pval'])
-        post_coefs.append(results_dict[predictor]['post']['coef'])
-        post_pvals.append(results_dict[predictor]['post']['pval'])
-    
-    # Create dataframes
-    coef_df = pd.DataFrame({
-        'Pre-Threshold': pre_coefs,
-        'Post-Threshold': post_coefs
-    }, index=predictors)
-    
-    pval_df = pd.DataFrame({
-        'Pre-Threshold': pre_pvals,
-        'Post-Threshold': post_pvals
-    }, index=predictors)
-    
-    # Create a custom color map - blue for negative, white for zero, red for positive
-    colors = ["blue", "white", "red"]
-    custom_cmap = LinearSegmentedColormap.from_list("custom_diverging", colors, N=256)
-    
-    # Create the heatmap
-    plt.figure(figsize=(10, max(6, len(predictors) * 0.4)))
-    
-    # Calculate the absolute max for symmetric color scaling
-    abs_max = max(abs(coef_df.min().min()), abs(coef_df.max().max()))
-    if abs_max == 0 or np.isnan(abs_max):
-        abs_max = 1.0  # Default if all values are 0 or NaN
-    
-    # Plot the heatmap
-    ax = sns.heatmap(coef_df, annot=True, cmap=custom_cmap, center=0, 
-                    vmin=-abs_max, vmax=abs_max, 
-                    linewidths=0.5, cbar_kws={"label": "Coefficient Value"})
-    
-    # Add significance stars
-    for i, predictor in enumerate(predictors):
-        # Pre-threshold stars
-        if not np.isnan(pre_pvals[i]):
-            if pre_pvals[i] < 0.001:
-                ax.text(0.5, i + 0.5, "***", ha='center', va='center', color='black', fontweight='bold')
-            elif pre_pvals[i] < 0.01:
-                ax.text(0.5, i + 0.5, "**", ha='center', va='center', color='black', fontweight='bold')
-            elif pre_pvals[i] < 0.05:
-                ax.text(0.5, i + 0.5, "*", ha='center', va='center', color='black', fontweight='bold')
+    # Create data subsets based on changepoint
+    if changepoint_x is not None:
+        df_pre = df_filtered[df_filtered[dv] <= changepoint_x].copy()
+        df_post = df_filtered[df_filtered[dv] > changepoint_x].copy()
+        print(f"Pre-changepoint: {len(df_pre)} samples, Post-changepoint: {len(df_post)} samples")
         
-        # Post-threshold stars
-        if not np.isnan(post_pvals[i]):
-            if post_pvals[i] < 0.001:
-                ax.text(1.5, i + 0.5, "***", ha='center', va='center', color='black', fontweight='bold')
-            elif post_pvals[i] < 0.01:
-                ax.text(1.5, i + 0.5, "**", ha='center', va='center', color='black', fontweight='bold')
-            elif post_pvals[i] < 0.05:
-                ax.text(1.5, i + 0.5, "*", ha='center', va='center', color='black', fontweight='bold')
+        # Skip if either subset is too small
+        if len(df_pre) < 5 or len(df_post) < 5:
+            print(f"Not enough data in one of the subsets for {dv}, skipping split analysis...")
+            data_sets = [("all", df_filtered)]
+        else:
+            data_sets = [("all", df_filtered), ("pre", df_pre), ("post", df_post)]
+    else:
+        print(f"No changepoint found for {dv}, analyzing all data only")
+        data_sets = [("all", df_filtered)]
     
-    # Set title and labels
-    plt.title(f"Pre vs Post Threshold Coefficients for {dependent_var}")
-    plt.xlabel("")
-    plt.ylabel("")
-    plt.tight_layout()
-    
-    # Add a legend for stars
-    plt.figtext(0.01, 0.01, "*p<0.05, **p<0.01, ***p<0.001", ha="left", fontsize=9)
-    
-    # Save the figure
-    plt.savefig(os.path.join(save_dir, f'heatmap_{dependent_var}.png'), dpi=300, bbox_inches='tight')
-    plt.close()
+    # Run analyses for each data subset
+    for subset_name, subset_df in data_sets:
+        print(f"\nAnalyzing {subset_name} data for {dv}...")
+        
+        # Create a working copy of the data
+        analysis_df = subset_df.copy()
+        
+        # Z-score the continuous predictors
+        for predictor in continuous_predictors:
+            if predictor in analysis_df.columns and analysis_df[predictor].std() > 0:
+                analysis_df[f'{predictor}_z'] = (analysis_df[predictor] - analysis_df[predictor].mean()) / analysis_df[predictor].std()
+        
+        # Effect-code the categorical predictors
+        for predictor in categorical_predictors:
+            raise NotImplementedError("Categorical predictors are not implemented yet")
+            if predictor in analysis_df.columns and len(analysis_df[predictor].unique()) >= 2:
+                # Get dummies with drop_first=True to create effect coding
+                dummies = pd.get_dummies(analysis_df[predictor], prefix=predictor, drop_first=True)
+                
+                # Convert from dummy (0/1) to effect coding (-1/1)
+                for col in dummies.columns:
+                    dummies[col] = dummies[col] * 2 - 1
+                
+                # Add to dataframe
+                analysis_df = pd.concat([analysis_df, dummies], axis=1)
+        
+        # Run regression for all predictors using the same approach
+        all_predictors = []
+        
+        # Add z-scored continuous predictors
+        for predictor in continuous_predictors:
+            z_pred = f'{predictor}_z'
+            if z_pred in analysis_df.columns and not analysis_df[z_pred].isna().all():
+                all_predictors.append(z_pred)
+        
+        # Add effect-coded categorical predictors
+        for predictor in categorical_predictors:
+            if predictor in analysis_df.columns:
+                effect_cols = [col for col in analysis_df.columns if col.startswith(f'{predictor}_')]
+                all_predictors.extend(effect_cols)
+        
+        # Run a single regression with all predictors
+        if len(all_predictors) > 0:
+            try:
+                # Remove rows with any NaN values in predictors or DV
+                mask = ~analysis_df[all_predictors + [dv]].isna().any(axis=1)
+                df_pred = analysis_df[mask].copy()
+                
+                if len(df_pred) < 5:
+                    print(f"Not enough data points for {dv}_{subset_name}")
+                    continue
+                    
+                # Check for zero variance predictors
+                valid_predictors = []
+                for pred in all_predictors:
+                    if df_pred[pred].std() > 0:
+                        valid_predictors.append(pred)
+                    else:
+                        print(f"Dropping {pred} due to zero variance")
+                
+                if len(valid_predictors) == 0:
+                    print(f"No valid predictors for {dv}_{subset_name}")
+                    continue
+                
+                # Run multiple regression
+                X = sm.add_constant(df_pred[valid_predictors])
+                model = sm.OLS(df_pred[dv], X).fit()
+                
+                # Extract overall model results
+                f_value = model.fvalue
+                p_value = model.f_pvalue
+                r_squared = model.rsquared
+                
+                print(f"\nOverall model for {dv}_{subset_name}:")
+                print(f"F={f_value:.2f}, p={p_value:.4f}, R²={r_squared:.4f}")
+                print("\nCoefficients:")
+                print(model.summary().tables[1])
+                
+                # Store results for each predictor
+                for predictor in valid_predictors:
+                    # Determine predictor type
+                    pred_type = 'continuous' if any(p in predictor for p in continuous_predictors) else 'categorical'
+                    orig_predictor = predictor.split('_')[0] if pred_type == 'categorical' else predictor.replace('_z', '')
+                    
+                    beta = model.params[predictor]
+                    p_val = model.pvalues[predictor]
+                    
+                    all_anova_results.append({
+                        'Dependent_Variable': f"{dv}_{subset_name}",
+                        'Predictor': orig_predictor,
+                        'Predictor_Type': pred_type,
+                        'F_Value': f_value,  # Overall model F
+                        'p_Value': p_val,    # Individual predictor p-value
+                        'R_Squared': r_squared,  # Overall model R²
+                        'Beta': beta,
+                        'Data_Subset': subset_name,
+                        'Sample_Size': len(df_pred)
+                    })
+                    
+                    # Create plots for significant predictors
+                    if p_val < 0.05:
+                        plt.figure(figsize=(10, 6))
+                        
+                        if pred_type == 'continuous':
+                            sns.regplot(x=predictor, y=dv, data=df_pred, scatter_kws={'alpha':0.7})
+                        else:
+                            sns.boxplot(x=df_pred[predictor], y=df_pred[dv])
+                            
+                        plt.title(f'Effect of {orig_predictor} on {dv} ({subset_name})\nβ={beta:.4f}, p={p_val:.4f}')
+                        plt.tight_layout()
+                        plt.savefig(os.path.join(anova_dir, f'regplot_{dv}_{orig_predictor}_{subset_name}.png'), dpi=300)
+                        plt.close()
+            except Exception as e:
+                print(f"Error analyzing {dv} ({subset_name}): {e}")
 
-# Replace the existing ANOVA section with a call to this new function
-# ...
-# Where your existing ANOVA analysis is, replace with:
-run_anova_with_heatmap(joined_df, independent_variables, dependent_variables, anova_dir)
+# Create separate heatmaps for each data subset
+for subset_name in ["all", "pre", "post"]:
+    subset_results = pd.DataFrame([r for r in all_anova_results if r['Data_Subset'] == subset_name])
+    
+    if len(subset_results) > 0:
+        significant_results = subset_results[subset_results['p_Value'] < 0.05].copy()
+        
+        if len(significant_results) > 0:
+            # Save the significant results to a CSV
+            significant_results.to_csv(os.path.join(anova_dir, f'significant_relationships_{subset_name}.csv'), index=False)
+            
+            # Create a pivot table for the heatmap
+            heatmap_data = significant_results.pivot_table(
+                index='Predictor', 
+                columns='Dependent_Variable',
+                values='R_Squared',
+                fill_value=0
+            )
+            
+            plt.figure(figsize=(12, 10))
+            sns.heatmap(heatmap_data, annot=True, cmap='viridis', fmt='.2f')
+            plt.title(f'R-squared Values for Significant Predictors ({subset_name} data, p < 0.05)')
+            plt.tight_layout()
+            plt.savefig(os.path.join(anova_dir, f'r_squared_heatmap_{subset_name}.png'), dpi=300)
+            plt.close()
+            
+            # Create a heatmap of F-values
+            f_heatmap_data = significant_results.pivot_table(
+                index='Predictor', 
+                columns='Dependent_Variable',
+                values='F_Value',
+                fill_value=0
+            )
+            
+            plt.figure(figsize=(12, 10))
+            sns.heatmap(f_heatmap_data, annot=True, cmap='magma', fmt='.1f', norm=LogNorm())
+            plt.title(f'F-Values for Significant Predictors ({subset_name} data, p < 0.05)')
+            plt.tight_layout()
+            plt.savefig(os.path.join(anova_dir, f'f_value_heatmap_{subset_name}.png'), dpi=300)
+            plt.close()
+print(f"\nAll ANOVA analyses complete. Results saved to {anova_dir}/")
