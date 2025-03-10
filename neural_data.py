@@ -1022,8 +1022,6 @@ for dv in dependent_variables:
         analysis_df = subset_df.copy()
         
         # Z-score the continuous predictors
-        import pdb;pdb.set_trace()
-
         for predictor in continuous_predictors:
             if predictor in analysis_df.columns and analysis_df[predictor].std() > 0:
                 analysis_df[f'{predictor}_z'] = (analysis_df[predictor] - analysis_df[predictor].mean()) / analysis_df[predictor].std()
@@ -1058,59 +1056,81 @@ for dv in dependent_variables:
                 effect_cols = [col for col in analysis_df.columns if col.startswith(f'{predictor}_')]
                 all_predictors.extend(effect_cols)
         
-        # Run individual regressions for each predictor for detailed analysis
-        for predictor in all_predictors:
-            df_pred = analysis_df[~analysis_df[predictor].isna()].copy()
-            
-            if len(df_pred) < 5 or df_pred[predictor].std() == 0:
-                continue
-                
+        # Run a single regression with all predictors
+        import pdb;pdb.set_trace()
+        if len(all_predictors) > 0:
             try:
-                # Run linear regression
-                X = sm.add_constant(df_pred[predictor])
+                # Remove rows with any NaN values in predictors or DV
+                mask = ~analysis_df[all_predictors + [dv]].isna().any(axis=1)
+                df_pred = analysis_df[mask].copy()
+                
+                if len(df_pred) < 5:
+                    print(f"Not enough data points for {dv}_{subset_name}")
+                    continue
+                    
+                # Check for zero variance predictors
+                valid_predictors = []
+                for pred in all_predictors:
+                    if df_pred[pred].std() > 0:
+                        valid_predictors.append(pred)
+                    else:
+                        print(f"Dropping {pred} due to zero variance")
+                
+                if len(valid_predictors) == 0:
+                    print(f"No valid predictors for {dv}_{subset_name}")
+                    continue
+                
+                # Run multiple regression
+                X = sm.add_constant(df_pred[valid_predictors])
                 model = sm.OLS(df_pred[dv], X).fit()
                 
-                # Extract results
+                # Extract overall model results
                 f_value = model.fvalue
                 p_value = model.f_pvalue
                 r_squared = model.rsquared
-                beta = model.params[1]  # Standardized coefficient
                 
-                # Determine predictor type
-                pred_type = 'continuous' if any(p in predictor for p in continuous_predictors) else 'categorical'
-                orig_predictor = predictor.split('_')[0] if pred_type == 'categorical' else predictor.replace('_z', '')
+                print(f"\nOverall model for {dv}_{subset_name}:")
+                print(f"F={f_value:.2f}, p={p_value:.4f}, R²={r_squared:.4f}")
+                print("\nCoefficients:")
+                print(model.summary().tables[1])
                 
-                all_anova_results.append({
-                    'Dependent_Variable': f"{dv}_{subset_name}",
-                    'Predictor': orig_predictor,
-                    'Predictor_Type': pred_type,
-                    'F_Value': f_value,
-                    'p_Value': p_value,
-                    'R_Squared': r_squared,
-                    'Beta': beta,
-                    'Data_Subset': subset_name,
-                    'Sample_Size': len(df_pred)
-                })
-                
-                print(f"Regression for {predictor}: F={f_value:.2f}, p={p_value:.4f}, R²={r_squared:.4f}, β={beta:.4f}")
-                
-                # Create and save plots for significant relationships
-                if p_value < 0.05:
-                    plt.figure(figsize=(10, 6))
+                # Store results for each predictor
+                for predictor in valid_predictors:
+                    # Determine predictor type
+                    pred_type = 'continuous' if any(p in predictor for p in continuous_predictors) else 'categorical'
+                    orig_predictor = predictor.split('_')[0] if pred_type == 'categorical' else predictor.replace('_z', '')
                     
-                    if pred_type == 'continuous':
-                        sns.regplot(x=predictor, y=dv, data=df_pred, scatter_kws={'alpha':0.7})
-                    else:
-                        # For categorical, create a special plot showing the effect
-                        sns.boxplot(x=df_pred[predictor], y=df_pred[dv])
+                    beta = model.params[predictor]
+                    p_val = model.pvalues[predictor]
+                    
+                    all_anova_results.append({
+                        'Dependent_Variable': f"{dv}_{subset_name}",
+                        'Predictor': orig_predictor,
+                        'Predictor_Type': pred_type,
+                        'F_Value': f_value,  # Overall model F
+                        'p_Value': p_val,    # Individual predictor p-value
+                        'R_Squared': r_squared,  # Overall model R²
+                        'Beta': beta,
+                        'Data_Subset': subset_name,
+                        'Sample_Size': len(df_pred)
+                    })
+                    
+                    # Create plots for significant predictors
+                    if p_val < 0.05:
+                        plt.figure(figsize=(10, 6))
                         
-                    plt.title(f'Effect of {orig_predictor} on {dv} ({subset_name})\nF={f_value:.2f}, p={p_value:.4f}, R²={r_squared:.4f}, β={beta:.4f}')
-                    plt.tight_layout()
-                    plt.savefig(os.path.join(anova_dir, f'regplot_{dv}_{orig_predictor}_{subset_name}.png'), dpi=300)
-                    plt.close()
+                        if pred_type == 'continuous':
+                            sns.regplot(x=predictor, y=dv, data=df_pred, scatter_kws={'alpha':0.7})
+                        else:
+                            sns.boxplot(x=df_pred[predictor], y=df_pred[dv])
+                            
+                        plt.title(f'Effect of {orig_predictor} on {dv} ({subset_name})\nβ={beta:.4f}, p={p_val:.4f}')
+                        plt.tight_layout()
+                        plt.savefig(os.path.join(anova_dir, f'regplot_{dv}_{orig_predictor}_{subset_name}.png'), dpi=300)
+                        plt.close()
             
             except Exception as e:
-                print(f"Error analyzing {predictor} for {dv} ({subset_name}): {e}")
+                print(f"Error analyzing {dv} ({subset_name}): {e}")
 
 # Create separate heatmaps for each data subset
 for subset_name in ["all", "pre", "post"]:
