@@ -487,13 +487,13 @@ def create_plot(x_column, y_column='normalized_brain_score', title=None, save_pa
         y_post = post_slope * x_post + post_intercept
         plt.plot(x_post, y_post, color='black', alpha=0.4, linestyle='--', linewidth=1.0)
         
-        # Format equations - ALWAYS THE SAME FORMAT
+        # Format equations
         eq1 = f"y = {pre_slope:.3f}x + {pre_intercept:.3f}"
         eq2 = f"y = {post_slope:.3f}x + {post_intercept:.3f}"
         
-        # Place equations in a text box - ALWAYS IN THE SAME POSITION
+        # Place equations in a text box - using absolute y=0.85
         plt.text(x_min + 0.05*(x_max - x_min),  # Fixed left position
-                y_min + 0.85*(y_max - y_min),    # Fixed 85% height
+                0.85,                            # Fixed absolute y position
                 f"Pre-threshold: {eq1}\nPost-threshold: {eq2}", 
                 fontsize=8,
                 ha='left',
@@ -715,25 +715,25 @@ if plot_data:
     #         ylim=(0, 1))
     
     # Then create annotated versions
-    create_plot('multi_label_acc', 
-            title='Brain Score vs Multi-label Accuracy', 
-            save_path=os.path.join(output_dir, 'multi_label_acc_vs_brain_annotated.png'),
-            ylim=(0, 1),
-            annotate_outliers=True)
+    # create_plot('multi_label_acc', 
+    #         title='Brain Score vs Multi-label Accuracy', 
+    #         save_path=os.path.join(output_dir, 'multi_label_acc_vs_brain_annotated.png'),
+    #         ylim=(0, 1),
+    #         annotate_outliers=True)
     
-    # # Repeat for other plots
+    # # # Repeat for other plots
+    # # create_plot('multi_label_acc', 
+    # #         y_column='spearman',
+    # #         title='ClickMe vs Multi-label Accuracy', 
+    # #         save_path=os.path.join(output_dir, 'multi_label_acc_vs_clickme.png'),
+    # #         ylim=(-0.3, 1))
+    
     # create_plot('multi_label_acc', 
     #         y_column='spearman',
     #         title='ClickMe vs Multi-label Accuracy', 
-    #         save_path=os.path.join(output_dir, 'multi_label_acc_vs_clickme.png'),
-    #         ylim=(-0.3, 1))
-    
-    create_plot('multi_label_acc', 
-            y_column='spearman',
-            title='ClickMe vs Multi-label Accuracy', 
-            save_path=os.path.join(output_dir, 'multi_label_acc_vs_clickme_annotated.png'),
-            ylim=(-0.3, 1),
-            annotate_outliers=True)
+    #         save_path=os.path.join(output_dir, 'multi_label_acc_vs_clickme_annotated.png'),
+    #         ylim=(-0.3, 1),
+    #         annotate_outliers=True)
 
     # create_plot('results_imagenet', 
     #         title='Brain Score vs ImageNet Accuracy', 
