@@ -401,7 +401,7 @@ def create_plot(x_column, y_column='normalized_brain_score', title=None, save_pa
         ax_main.text(
             text_x,
             text_y,
-            'Human Accuracy',
+            'Human accuracy',
             fontsize=8,
             color='#505050',
             ha='center',
@@ -467,10 +467,6 @@ def create_plot(x_column, y_column='normalized_brain_score', title=None, save_pa
     x_min, x_max = plt.xlim()
     y_min, y_max = plt.ylim()
     
-    # Initialize equation text variables
-    eq1 = None
-    eq2 = None
-    
     if sum(valid_indices) > 4:  # Need enough points for a meaningful fit
         # Compute piecewise fit
         (pre_slope, pre_intercept), (post_slope, post_intercept), fit_params = compute_piecewise_upper_bound(
@@ -495,235 +491,13 @@ def create_plot(x_column, y_column='normalized_brain_score', title=None, save_pa
         eq1 = f"y = {pre_slope:.3f}x + {pre_intercept:.3f}"
         eq2 = f"y = {post_slope:.3f}x + {post_intercept:.3f}"
         
-        # DO NOT add equations text here - we'll do it once at the end
-        
-        # Determine positions for all annotations
-        from matplotlib.patches import ConnectionPatch
-        
-        valid_x = x_data[valid_indices]
-        valid_y = y_data[valid_indices]
-        valid_models = joined_df.iloc[valid_indices].reset_index(drop=True)
-        
-        # Find model closest to changepoint
-        distances_to_changepoint = np.sqrt((valid_x - change_x)**2 + (valid_y - change_y)**2)
-        changepoint_model_idx = np.argmin(distances_to_changepoint)
-        
-        # Find model at far left
-        leftmost_idx = np.argmin(valid_x)
-        
-        # Find model at far right
-        rightmost_idx = np.argmax(valid_x)
-        
-        # Get model names
-        possible_name_cols = ['model_name', 'name', 'meta_name', 'model', 'model_id']
-        model_name_col = None
-        
-        for col in possible_name_cols:
-            if col in valid_models.columns:
-                model_name_col = col
-                break
-                
-        if model_name_col is None:
-            changepoint_model_name = "Changepoint Model"
-            leftmost_model_name = "Leftmost Model"
-            rightmost_model_name = "Rightmost Model"
-        else:
-            def get_short_name(full_name):
-                if '/' in str(full_name):
-                    parts = str(full_name).split('/')
-                    return parts[-1]
-                else:
-                    name = str(full_name)
-                    if len(name) > 20:
-                        return name[:17] + "..."
-                    return name
-            
-            changepoint_model_name = get_short_name(valid_models.iloc[changepoint_model_idx][model_name_col])
-            leftmost_model_name = get_short_name(valid_models.iloc[leftmost_idx][model_name_col])
-            rightmost_model_name = get_short_name(valid_models.iloc[rightmost_idx][model_name_col])
-        
-        # Function to find clear space for text labels
-        def find_clear_space(x, y, data_x, data_y, radius=0.15):
-            angles = [0, np.pi/6, np.pi/3, np.pi/2, 2*np.pi/3, 5*np.pi/6, np.pi, 
-                     7*np.pi/6, 4*np.pi/3, 3*np.pi/2, 5*np.pi/3, 11*np.pi/6]
-            
-            best_angle = angles[0]
-            min_nearby = float('inf')
-            
-            for angle in angles:
-                pos_x = x + radius * np.cos(angle)
-                pos_y = y + radius * np.sin(angle)
-                
-                margin = 0.05 * (y_max - y_min)
-                if (pos_x < x_min + margin or pos_x > x_max - margin or 
-                    pos_y < y_min + margin or pos_y > y_max - margin):
-                    continue
-                
-                dx = data_x - pos_x
-                dy = data_y - pos_y
-                distances = np.sqrt(dx**2 + dy**2)
-                nearby = np.sum(distances < 0.05 * (x_max - x_min))
-                
-                if nearby < min_nearby:
-                    min_nearby = nearby
-                    best_angle = angle
-            
-            if min_nearby == float('inf'):
-                best_angle = np.pi/4
-                pos_x = min(max(x + radius * np.cos(best_angle), x_min + margin), x_max - margin)
-                pos_y = min(max(y + radius * np.sin(best_angle), y_min + margin), y_max - margin)
-            else:
-                pos_x = x + radius * np.cos(best_angle)
-                pos_y = y + radius * np.sin(best_angle)
-            
-            return pos_x, pos_y, best_angle
-        
-        # Helper function to adjust arrow endpoint to be very close to the dot's center
-        def adjust_endpoint(start_x, start_y, end_x, end_y, marker_radius=0.005):
-            """
-            Calculate an endpoint that's along the line from start to end,
-            but stops just short of the end point (dot center)
-            """
-            # Calculate the direction vector from text to dot center
-            dx, dy = end_x - start_x, end_y - start_y
-            distance = np.sqrt(dx**2 + dy**2)
-            
-            if distance < marker_radius:  # If already too close
-                return end_x, end_y
-                
-            # Normalize the direction vector
-            dx, dy = dx/distance, dy/distance
-            
-            # Move very close to the dot center along the direct line
-            # Only a tiny gap to prevent exact overlap
-            adjusted_end_x = end_x - dx * marker_radius
-            adjusted_end_y = end_y - dy * marker_radius
-            
-            return adjusted_end_x, adjusted_end_y
-        
-        # Collect all annotation positions for later use
-        cp_x, cp_y = valid_x[changepoint_model_idx], valid_y[changepoint_model_idx]
-        cp_text_x, cp_text_y, _ = find_clear_space(cp_x, cp_y, valid_x, valid_y, radius=0.15)
-        
-        left_x, left_y = valid_x[leftmost_idx], valid_y[leftmost_idx]
-        left_text_x, left_text_y, _ = find_clear_space(left_x, left_y, valid_x, valid_y, radius=0.15)
-        
-        right_x, right_y = valid_x[rightmost_idx], valid_y[rightmost_idx]
-        right_text_x, right_text_y, _ = find_clear_space(right_x, right_y, valid_x, valid_y, radius=0.15)
-        
-        # Calculate appropriate marker distance - very small to get arrows close to dot centers
-        x_range = x_max - x_min
-        y_range = y_max - y_min
-        plot_scale = np.sqrt(x_range**2 + y_range**2)
-        marker_distance = plot_scale * 0.003  # Very small offset - just 0.3% of plot diagonal
-        
-        # Find position for equation text that doesn't overlap with annotations
-        def is_overlapping(x, y, width, height, points, min_distance=0.1):
-            for px, py in points:
-                if (abs(x - px) < width/2 + min_distance and 
-                    abs(y - py) < height/2 + min_distance):
-                    return True
-            return False
-        
-        # Calculate width and height of equation text box (approximate)
-        eq_width = 0.25 * (x_max - x_min)
-        eq_height = 0.1 * (y_max - y_min)
-        
-        # Define potential positions for equation text
-        eq_positions = [
-            (x_min + 0.85*(x_max - x_min), y_min + 0.85*(y_max - y_min), 'right', 'top'),
-            (x_min + 0.15*(x_max - x_min), y_min + 0.85*(y_max - y_min), 'left', 'top'),
-            (x_min + 0.85*(x_max - x_min), y_min + 0.15*(y_max - y_min), 'right', 'bottom'),
-            (x_min + 0.15*(x_max - x_min), y_min + 0.15*(y_max - y_min), 'left', 'bottom'),
-            (x_min + 0.5*(x_max - x_min), y_min + 0.85*(y_max - y_min), 'center', 'top'),
-            (x_min + 0.5*(x_max - x_min), y_min + 0.15*(y_max - y_min), 'center', 'bottom')
-        ]
-        
-        # Points to avoid
-        annotation_points = [
-            (cp_text_x, cp_text_y),
-            (left_text_x, left_text_y),
-            (right_text_x, right_text_y),
-            (change_x, change_y)
-        ]
-        
-        # Find position that doesn't overlap
-        eq_x, eq_y, eq_ha, eq_va = eq_positions[0]
-        for pos_x, pos_y, ha, va in eq_positions:
-            if not is_overlapping(pos_x, pos_y, eq_width, eq_height, annotation_points):
-                eq_x, eq_y, eq_ha, eq_va = pos_x, pos_y, ha, va
-                break
-        
-        # Place equations in a text box at the non-overlapping position
-        plt.text(eq_x, eq_y, 
+        # Place equations in a text box in the top left corner
+        plt.text(x_min + 0.05*(x_max - x_min), y_max - 0.05*(y_max - y_min), 
                 f"Pre-threshold: {eq1}\nPost-threshold: {eq2}", 
                 fontsize=8,
-                ha=eq_ha, va=eq_va,
+                ha='left', va='top',
                 bbox=dict(facecolor='white', alpha=1.0, edgecolor='#CCCCCC', boxstyle='round,pad=0.5'),
                 zorder=10)
-        
-        # Add annotation for changepoint model with adjusted endpoint
-        adjusted_cp_x, adjusted_cp_y = adjust_endpoint(
-            cp_text_x, cp_text_y, cp_x, cp_y, marker_distance)
-        
-        con = ConnectionPatch(
-            xyA=(cp_text_x, cp_text_y),
-            xyB=(adjusted_cp_x, adjusted_cp_y),
-            coordsA="data", coordsB="data",
-            arrowstyle="-|>", 
-            color="black",
-            connectionstyle=f"arc3,rad={0.2}",  # Reduced curvature
-            linewidth=1,
-            zorder=11
-        )
-        plt.gca().add_artist(con)
-        
-        plt.text(cp_text_x, cp_text_y, changepoint_model_name, fontsize=8,
-                ha='center', va='center',
-                bbox=dict(facecolor='white', alpha=0.8, edgecolor='black', boxstyle='round,pad=0.3'),
-                zorder=12)
-        
-        # Add annotation for leftmost model with adjusted endpoint
-        adjusted_left_x, adjusted_left_y = adjust_endpoint(
-            left_text_x, left_text_y, left_x, left_y, marker_distance)
-        
-        con = ConnectionPatch(
-            xyA=(left_text_x, left_text_y),
-            xyB=(adjusted_left_x, adjusted_left_y),
-            coordsA="data", coordsB="data",
-            arrowstyle="-|>", 
-            color="black",
-            connectionstyle=f"arc3,rad={-0.2}",  # Reduced curvature
-            linewidth=1,
-            zorder=11
-        )
-        plt.gca().add_artist(con)
-        
-        plt.text(left_text_x, left_text_y, leftmost_model_name, fontsize=8,
-                ha='center', va='center',
-                bbox=dict(facecolor='white', alpha=0.8, edgecolor='black', boxstyle='round,pad=0.3'),
-                zorder=12)
-        
-        # Add annotation for rightmost model with adjusted endpoint
-        adjusted_right_x, adjusted_right_y = adjust_endpoint(
-            right_text_x, right_text_y, right_x, right_y, marker_distance)
-        
-        con = ConnectionPatch(
-            xyA=(right_text_x, right_text_y),
-            xyB=(adjusted_right_x, adjusted_right_y),
-            coordsA="data", coordsB="data",
-            arrowstyle="-|>", 
-            color="black",
-            connectionstyle=f"arc3,rad={0.2}",  # Reduced curvature
-            linewidth=1,
-            zorder=11
-        )
-        plt.gca().add_artist(con)
-        
-        plt.text(right_text_x, right_text_y, rightmost_model_name, fontsize=8,
-                ha='center', va='center',
-                bbox=dict(facecolor='white', alpha=0.8, edgecolor='black', boxstyle='round,pad=0.3'),
-                zorder=12)
     
     # Set labels and style for main plot
     if title and ' vs ' in title:
@@ -795,19 +569,6 @@ def create_plot(x_column, y_column='normalized_brain_score', title=None, save_pa
         plt.savefig(pdf_path, bbox_inches='tight', format='pdf')
     
     plt.show()
-
-    # Add equations text ONCE at the end if they were calculated
-    if eq1 is not None and eq2 is not None:
-        # Position in top left corner
-        eq_x = x_min + 0.05 * (x_max - x_min)  # 5% from left edge
-        eq_y = y_max - 0.05 * (y_max - y_min)  # 5% from top edge
-        
-        plt.text(eq_x, eq_y, 
-                f"Pre-threshold: {eq1}\nPost-threshold: {eq2}", 
-                fontsize=8,
-                ha='left', va='top',
-                bbox=dict(facecolor='white', alpha=1.0, edgecolor='#CCCCCC', boxstyle='round,pad=0.5'),
-                zorder=10)
 
 
 def categorize_training_data(model_name):
