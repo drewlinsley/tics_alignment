@@ -374,29 +374,14 @@ def create_plot(x_column, y_column='normalized_brain_score', title=None, save_pa
     # After data is loaded and valid_indices is created, then add the human accuracy patch
     # This should be after x_data and valid_indices are defined
     
-    # Add human accuracy patch for multi_label_acc plots
+    # For the Human Accuracy label in multi_label_acc plots
     if x_column == 'multi_label_acc':
-        # Get current y-axis limits after plotting data
-        y_min, y_max = ax_main.get_ylim() if ylim is None else ylim
+        # Get current axis limits
         x_min, x_max = ax_main.get_xlim()
+        y_min, y_max = ax_main.get_ylim()
         
-        # Create a light gray patch for human accuracy range
+        # Calculate mean y-value of dots with x > human_acc_min
         human_acc_min = 0.919
-        human_acc_max = 0.973
-        
-        # Create the patch
-        rect = plt.Rectangle(
-            (human_acc_min, y_min), 
-            human_acc_max - human_acc_min, 
-            y_max - y_min,
-            facecolor='#E0E0E0',
-            alpha=0.3,
-            edgecolor=None,
-            zorder=1
-        )
-        ax_main.add_patch(rect)
-        
-        # Now that we have x_data and valid_indices, calculate the mean y-value
         valid_x = x_data[valid_indices]
         valid_y = y_data[valid_indices]
         
@@ -422,7 +407,7 @@ def create_plot(x_column, y_column='normalized_brain_score', title=None, save_pa
             va = 'top'
         
         # Add the Human Accuracy text label
-        plt.text(x_label, y_label, 'Human Accuracy', 
+        ax_main.text(x_label, y_label, 'Human Accuracy', 
                 fontsize=8, ha='left', va=va, 
                 bbox=dict(facecolor='white', alpha=0.8, edgecolor='none'),
                 zorder=10)
