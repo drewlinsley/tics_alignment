@@ -365,52 +365,51 @@ def create_plot(x_column, y_column='normalized_brain_score', title=None, save_pa
     # Main plot subplot
     ax_main = plt.subplot(gs[0])
     
-    # Track whether equations have been plotted
-    equations_plotted = False
-    
-    # Load the data first - keep all your existing data loading code here
-    # ...
-    
-    # After data is loaded and valid_indices is created, then add the human accuracy patch
-    # This should be after x_data and valid_indices are defined
-    
-    # For the Human Accuracy label in multi_label_acc plots
+    # Add human accuracy patch for multi_label_acc plots
+    human_accuracy_region = None
     if x_column == 'multi_label_acc':
-        # Get current axis limits
-        x_min, x_max = ax_main.get_xlim()
-        y_min, y_max = ax_main.get_ylim()
+        # Get current y-axis limits
+        y_min, y_max = ax_main.get_ylim() if ylim is None else ylim
         
-        # Calculate mean y-value of dots with x > human_acc_min
+        # Create a light gray patch for human accuracy range
         human_acc_min = 0.919
-        valid_x = x_data[valid_indices]
-        valid_y = y_data[valid_indices]
+        human_acc_max = 0.973
         
-        # Find dots with x > human_acc_min
-        dots_beyond_threshold = [valid_y[i] for i in range(len(valid_x)) if valid_x[i] > human_acc_min]
+        # Create the patch
+        rect = plt.Rectangle(
+            (human_acc_min, y_min), 
+            human_acc_max - human_acc_min, 
+            y_max - y_min,
+            facecolor='#E0E0E0',
+            alpha=0.3,
+            edgecolor=None,
+            zorder=1
+        )
+        ax_main.add_patch(rect)
         
-        # Calculate mean if dots exist beyond threshold
-        if dots_beyond_threshold:
-            mean_y_beyond_threshold = sum(dots_beyond_threshold) / len(dots_beyond_threshold)
-        else:
-            mean_y_beyond_threshold = 0
+        # Store the region where "Human accuracy" text will be
+        text_x = (human_acc_min + human_acc_max) / 2
+        text_y = y_max * 0.95
+        human_accuracy_region = {
+            'x': text_x,
+            'y': text_y,
+            'width': (human_acc_max - human_acc_min),
+            'height': 0.05 * (y_max - y_min)  # Approximate text height
+        }
         
-        # Determine label position based on mean y-value
-        x_label = x_min + 0.05 * (x_max - x_min)  # Always 5% from left edge
-        
-        if mean_y_beyond_threshold > 0.5:
-            # If mean > 0.5, place label at bottom
-            y_label = y_min + 0.05 * (y_max - y_min)  # 5% from bottom
-            va = 'bottom'
-        else:
-            # Otherwise place label at top
-            y_label = y_max - 0.05 * (y_max - y_min)  # 5% from top
-            va = 'top'
-        
-        # Add the Human Accuracy text label
-        ax_main.text(x_label, y_label, 'Human Accuracy', 
-                fontsize=8, ha='left', va=va, 
-                bbox=dict(facecolor='white', alpha=0.8, edgecolor='none'),
-                zorder=10)
+        # Add text label
+        ax_main.text(
+            text_x,
+            text_y,
+            'Human Accuracy',
+            fontsize=8,
+            color='#505050',
+            ha='center',
+            va='top',
+            style='italic',
+            bbox=dict(facecolor='white', alpha=0.7, edgecolor=None, pad=2),
+            zorder=1
+        )
     
     # Replace 'selfsup' with 'SSL' in the joined_df
     # joined_df['model_type_category'] = joined_df['model_type_category'].replace('selfsup', 'SSL')
@@ -464,6 +463,14 @@ def create_plot(x_column, y_column='normalized_brain_score', title=None, save_pa
     y_data = joined_df[y_column].values
     valid_indices = ~np.isnan(x_data) & ~np.isnan(y_data)
     
+    # Get current axis limits before any additional plotting
+    x_min, x_max = plt.xlim()
+    y_min, y_max = plt.ylim()
+    
+    # Initialize equation text variables
+    eq1 = None
+    eq2 = None
+    
     if sum(valid_indices) > 4:  # Need enough points for a meaningful fit
         # Compute piecewise fit
         (pre_slope, pre_intercept), (post_slope, post_intercept), fit_params = compute_piecewise_upper_bound(
@@ -473,10 +480,6 @@ def create_plot(x_column, y_column='normalized_brain_score', title=None, save_pa
         
         # Extract parameters
         change_x, change_y = fit_params['changepoint']
-        
-        # Get updated axis limits
-        x_min, x_max = ax_main.get_xlim()
-        y_min, y_max = ax_main.get_ylim()
         
         # Plot pre-changepoint line - extend all the way across the plot
         x_pre = np.array([x_min, x_max])
@@ -488,23 +491,11 @@ def create_plot(x_column, y_column='normalized_brain_score', title=None, save_pa
         y_post = post_slope * x_post + post_intercept
         plt.plot(x_post, y_post, color='black', alpha=0.4, linestyle='--', linewidth=1.0)
         
-        # Format equations and plot ONLY ONCE in the top left corner
-        if not equations_plotted:
-            eq1 = f"y = {pre_slope:.3f}x + {pre_intercept:.3f}"
-            eq2 = f"y = {post_slope:.3f}x + {post_intercept:.3f}"
-            
-            # Place equations in the top left corner
-            eq_x = x_min + 0.05 * (x_max - x_min)  # 5% from left edge
-            eq_y = y_max - 0.05 * (y_max - y_min)  # 5% from top edge
-            
-            plt.text(eq_x, eq_y, 
-                    f"Pre-threshold: {eq1}\nPost-threshold: {eq2}", 
-                    fontsize=8,
-                    ha='left', va='top',
-                    bbox=dict(facecolor='white', alpha=1.0, edgecolor='#CCCCCC', boxstyle='round,pad=0.5'),
-                    zorder=10)
-            
-            equations_plotted = True
+        # Format equations
+        eq1 = f"y = {pre_slope:.3f}x + {pre_intercept:.3f}"
+        eq2 = f"y = {post_slope:.3f}x + {post_intercept:.3f}"
+        
+        # DO NOT add equations text here - we'll do it once at the end
         
         # Determine positions for all annotations
         from matplotlib.patches import ConnectionPatch
@@ -804,6 +795,19 @@ def create_plot(x_column, y_column='normalized_brain_score', title=None, save_pa
         plt.savefig(pdf_path, bbox_inches='tight', format='pdf')
     
     plt.show()
+
+    # Add equations text ONCE at the end if they were calculated
+    if eq1 is not None and eq2 is not None:
+        # Position in top left corner
+        eq_x = x_min + 0.05 * (x_max - x_min)  # 5% from left edge
+        eq_y = y_max - 0.05 * (y_max - y_min)  # 5% from top edge
+        
+        plt.text(eq_x, eq_y, 
+                f"Pre-threshold: {eq1}\nPost-threshold: {eq2}", 
+                fontsize=8,
+                ha='left', va='top',
+                bbox=dict(facecolor='white', alpha=1.0, edgecolor='#CCCCCC', boxstyle='round,pad=0.5'),
+                zorder=10)
 
 
 def categorize_training_data(model_name):
