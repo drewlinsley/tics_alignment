@@ -854,14 +854,6 @@ if plot_data:
             save_path=os.path.join(output_dir, 'multi_label_acc_vs_brain_annotated.png'),
             ylim=(0, 1),
             annotate_outliers=True)
-    
-    # # Repeat for other plots
-    # create_plot('multi_label_acc', 
-    #         y_column='spearman',
-    #         title='ClickMe vs Multi-label Accuracy', 
-    #         save_path=os.path.join(output_dir, 'multi_label_acc_vs_clickme.png'),
-    #         ylim=(-0.3, 1))
-    
     create_plot('multi_label_acc', 
             y_column='spearman',
             title='ClickMe vs Multi-label Accuracy', 
@@ -869,65 +861,37 @@ if plot_data:
             ylim=(-0.3, 1),
             annotate_outliers=True)
 
-    # create_plot('results_imagenet', 
+    # # # 
+    # create_plot('results_imagenet',
+    #         y_column='spearman',
     #         title='Brain Score vs ImageNet Accuracy', 
-    #         save_path=os.path.join(output_dir, 'imagenet_vs_brain.png'),
+    #         save_path=os.path.join(output_dir, 'imagenet_vs_brain_annotated.png'),
     #         ylim=(-0.3, 1),
-    #         y_column='spearman')
-    create_plot('results_imagenet',
-            y_column='spearman',
-            title='Brain Score vs ImageNet Accuracy', 
-            save_path=os.path.join(output_dir, 'imagenet_vs_brain_annotated.png'),
-            ylim=(-0.3, 1),
-            annotate_outliers=True)
-
+    #         annotate_outliers=True)
     # create_plot('results_sketch', 
+    #         y_column='spearman',
     #         title='Brain Score vs Sketch Accuracy', 
-    #         save_path=os.path.join(output_dir, 'sketch_vs_brain.png'),
+    #         save_path=os.path.join(output_dir, 'sketch_vs_brain_annotated.png'),
     #         ylim=(-0.3, 1),
-    #         y_column='spearman')
-    create_plot('results_sketch', 
-            y_column='spearman',
-            title='Brain Score vs Sketch Accuracy', 
-            save_path=os.path.join(output_dir, 'sketch_vs_brain_annotated.png'),
-            ylim=(-0.3, 1),
-            annotate_outliers=True)
-
+    #         annotate_outliers=True)
     # create_plot('results_imagenetv2_matched_frequency', 
+    #         y_column='spearman',
     #         title='Brain Score vs ImageNetV2 Accuracy', 
-    #         save_path=os.path.join(output_dir, 'imagenetv2_vs_brain.png'),
+    #         save_path=os.path.join(output_dir, 'imagenetv2_vs_brain_annotated.png'),
     #         ylim=(-0.3, 1),
-    #         y_column='spearman')
-    create_plot('results_imagenetv2_matched_frequency', 
-            y_column='spearman',
-            title='Brain Score vs ImageNetV2 Accuracy', 
-            save_path=os.path.join(output_dir, 'imagenetv2_vs_brain_annotated.png'),
-            ylim=(-0.3, 1),
-            annotate_outliers=True)
-
+    #         annotate_outliers=True)
     # create_plot('results_imagenet_r', 
+    #         y_column='spearman',
     #         title='Brain Score vs ImageNet-R Accuracy', 
-    #         save_path=os.path.join(output_dir, 'imagenet_r_vs_brain.png'),
+    #         save_path=os.path.join(output_dir, 'imagenet_r_vs_brain_annotated.png'),
     #         ylim=(-0.3, 1),
-    #         y_column='spearman')
-    create_plot('results_imagenet_r', 
-            y_column='spearman',
-            title='Brain Score vs ImageNet-R Accuracy', 
-            save_path=os.path.join(output_dir, 'imagenet_r_vs_brain_annotated.png'),
-            ylim=(-0.3, 1),
-            annotate_outliers=True)
-
+    #         annotate_outliers=True)
     # create_plot('results_imagenet_a', 
+    #         y_column='spearman',
     #         title='Brain Score vs ImageNet-A Accuracy', 
-    #         save_path=os.path.join(output_dir, 'imagenet_a_vs_brain.png'),
+    #         save_path=os.path.join(output_dir, 'imagenet_a_vs_brain_annotated.png'),
     #         ylim=(-0.3, 1),
-    #         y_column='spearman')
-    create_plot('results_imagenet_a', 
-            y_column='spearman',
-            title='Brain Score vs ImageNet-A Accuracy', 
-            save_path=os.path.join(output_dir, 'imagenet_a_vs_brain_annotated.png'),
-            ylim=(-0.3, 1),
-            annotate_outliers=True)
+    #         annotate_outliers=True)
 
 # Define the variables to analyze
 dependent_variables = [
