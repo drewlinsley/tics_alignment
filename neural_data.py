@@ -15,6 +15,12 @@ from scipy.optimize import curve_fit
 import colorsys
 from sklearn.linear_model import RANSACRegressor
 from matplotlib.patches import ConnectionPatch
+from matplotlib_venn import venn3, venn3_circles
+from matplotlib.patches import Circle
+from sklearn.decomposition import PCA
+from sklearn.preprocessing import StandardScaler
+import matplotlib as mpl
+from matplotlib.ticker import MaxNLocator
 
 
 plot_data = True
@@ -22,6 +28,7 @@ plot_data = True
 # At the top of the file, add a dictionary to store changepoints
 # This will be a global variable to store changepoints computed during plotting
 changepoint_cache = {}
+
 
 # Create model type categories
 def categorize_model_type(model_type):
@@ -342,26 +349,26 @@ def create_model_dataset_color_scheme():
 changepoints = {}
 
 # Create a function to make the plots
-def create_plot(x_column, y_column='normalized_brain_score', title=None, save_path=None, ylim=None, annotate_outliers=False):
+def create_plot(x_column, y_column='normalized_brain_score', title=None, save_path=None, ylim=None, xlim=None, annotate_outliers=False, plot_lines=True):
     # Set publication-quality style
     plt.rcParams.update({
         'font.family': 'sans-serif',
         'font.sans-serif': ['Raleway'],
-        'font.size': 12,
-        'axes.linewidth': 0.8,
-        'axes.labelsize': 12,
-        'axes.titlesize': 12,
-        'xtick.labelsize': 12,
-        'ytick.labelsize': 12,
-        'legend.fontsize': 8,
-        'lines.linewidth': 1.5,
-        'patch.linewidth': 0.8,
+        'font.size': 14,  # Increased from 12
+        'axes.linewidth': 1.0,  # Increased from 0.8
+        'axes.labelsize': 16,  # Increased from 12
+        'axes.titlesize': 18,  # Increased from 12
+        'xtick.labelsize': 14,  # Increased from 12
+        'ytick.labelsize': 14,  # Increased from 12
+        'legend.fontsize': 12,  # Increased from 8
+        'lines.linewidth': 2.0,  # Increased from 1.5
+        'patch.linewidth': 1.0,  # Increased from 0.8
         'savefig.dpi': 600,
         'savefig.format': 'pdf'
     })
     
     # Create figure with two subplots - main plot and legend
-    fig = plt.figure(figsize=(4.5 * 2, 3.0 * 2))
+    fig = plt.figure(figsize=(5.5 * 2, 3.0 * 2))
     gs = plt.GridSpec(1, 2, width_ratios=[3, 1])
     
     # Main plot subplot
@@ -404,7 +411,7 @@ def create_plot(x_column, y_column='normalized_brain_score', title=None, save_pa
             text_x,
             text_y,
             'Human accuracy',
-            fontsize=8,
+            fontsize=12,  # Increased from 8
             color='#505050',
             ha='center',
             va='top',
@@ -453,10 +460,10 @@ def create_plot(x_column, y_column='normalized_brain_score', title=None, save_pa
                 color=color_dict.get(cat, '#999999'),
                 marker=marker_styles.get(cat_data['vision_or_VLM'].iloc[0], 'o'),
                 alpha=0.8,  
-                s=25,
+                s=80,  # Increased from 25
                 label=cat,
                 edgecolor='black',  
-                linewidth=0.3,
+                linewidth=0.5,
                 zorder=5  # Set zorder for scatter points
             )
     
@@ -488,26 +495,29 @@ def create_plot(x_column, y_column='normalized_brain_score', title=None, save_pa
         # Plot pre-changepoint line - extend all the way across the plot
         x_pre = np.array([x_min, x_max])
         y_pre = pre_slope * x_pre + pre_intercept
-        plt.plot(x_pre, y_pre, color='black', alpha=0.4, linestyle='--', linewidth=1.0)
+        if plot_lines:
+            plt.plot(x_pre, y_pre, color='black', alpha=0.6, linestyle='--', linewidth=2.0)  # Increased from 1.5
         
         # Plot post-changepoint line - extend all the way across the plot
         x_post = np.array([x_min, x_max])
         y_post = post_slope * x_post + post_intercept
-        plt.plot(x_post, y_post, color='black', alpha=0.4, linestyle='--', linewidth=1.0)
+        if plot_lines:
+            plt.plot(x_post, y_post, color='black', alpha=0.6, linestyle='--', linewidth=2.0)  # Increased from 1.5
         
         # Format equations
         eq1 = f"y = {pre_slope:.3f}x + {pre_intercept:.3f}"
         eq2 = f"y = {post_slope:.3f}x + {post_intercept:.3f}"
         
-        # Place equations in a text box - using absolute y=0.85
-        plt.text(x_min + 0.05*(x_max - x_min),  # Fixed left position
-                0.85,                            # Fixed absolute y position
-                f"Pre-threshold: {eq1}\nPost-threshold: {eq2}", 
-                fontsize=8,
-                ha='left',
-                va='top',
-                bbox=dict(facecolor='white', alpha=1.0, edgecolor='#CCCCCC', boxstyle='round,pad=0.5'),
-                zorder=10)
+        if plot_lines:
+            # Place equations in a text box - using absolute y=0.85
+            plt.text(x_min + 0.05*(x_max - x_min),  # Fixed left position
+                    0.85,                            # Fixed absolute y position
+                    f"Pre-changepoint: {eq1}\nPost-changepoint: {eq2}", 
+                    fontsize=12,  # Increased from 8
+                    ha='left',
+                    va='top',
+                    bbox=dict(facecolor='white', alpha=1.0, edgecolor='#CCCCCC', boxstyle='round,pad=0.5'),
+                    zorder=10)
         
         # Highlight the model at the changepoint and the model with the highest x-value post-changepoint
         from matplotlib.patches import ConnectionPatch
@@ -559,7 +569,7 @@ def create_plot(x_column, y_column='normalized_brain_score', title=None, save_pa
             far_right_model_name = get_short_name(valid_models.iloc[far_right_model_idx][model_name_col])
         
         # Helper function to adjust arrow endpoint to be very close to the dot's center
-        def adjust_endpoint(start_x, start_y, end_x, end_y, marker_radius=0.005):
+        def adjust_endpoint(start_x, start_y, end_x, end_y, marker_radius=0.008):  # Increased from 0.005
             dx, dy = end_x - start_x, end_y - start_y
             distance = np.sqrt(dx**2 + dy**2)
             
@@ -576,7 +586,7 @@ def create_plot(x_column, y_column='normalized_brain_score', title=None, save_pa
         x_range = x_max - x_min
         y_range = y_max - y_min
         plot_scale = np.sqrt(x_range**2 + y_range**2)
-        marker_distance = plot_scale * 0.003
+        marker_distance = plot_scale * 0.005  # Increased from 0.003
         
         # Add annotation for changepoint model
         cp_x, cp_y = valid_x[changepoint_model_idx], valid_y[changepoint_model_idx]
@@ -590,12 +600,12 @@ def create_plot(x_column, y_column='normalized_brain_score', title=None, save_pa
             arrowstyle="-|>", 
             color="black",
             connectionstyle=f"arc3,rad={0.2}",
-            linewidth=1,
+            linewidth=1.5,  # Increased from 1.0
             zorder=11
         )
         plt.gca().add_artist(con)
         
-        plt.text(cp_text_x, cp_text_y, changepoint_model_name, fontsize=8,
+        plt.text(cp_text_x, cp_text_y, changepoint_model_name, fontsize=12,  # Increased from 8
                 ha='center', va='center',
                 bbox=dict(facecolor='white', alpha=0.8, edgecolor='black', boxstyle='round,pad=0.3'),
                 zorder=12)
@@ -611,12 +621,12 @@ def create_plot(x_column, y_column='normalized_brain_score', title=None, save_pa
             arrowstyle="-|>", 
             color="black",
             connectionstyle=f"arc3,rad={0.2}",
-            linewidth=1,
+            linewidth=1.5,  # Increased from 1.0
             zorder=11
         )
         plt.gca().add_artist(con)
         
-        plt.text(far_right_text_x, far_right_text_y, far_right_model_name, fontsize=8,
+        plt.text(far_right_text_x, far_right_text_y, far_right_model_name, fontsize=12,  # Increased from 8
                 ha='center', va='center',
                 bbox=dict(facecolor='white', alpha=0.8, edgecolor='black', boxstyle='round,pad=0.3'),
                 zorder=12)
@@ -626,12 +636,20 @@ def create_plot(x_column, y_column='normalized_brain_score', title=None, save_pa
         y_label, x_label = title.split(' vs ')
     else:
         x_label = x_column
-        y_label = 'IT cortex Brain Score' if y_column == 'normalized_brain_score' else y_column
+        # Updated y-axis labels as requested
+        if y_column == 'normalized_brain_score':
+            y_label = 'Alignment with IT activity'
+        elif y_column == 'spearman':
+            y_label = 'Alignment with human feature importance'
+        else:
+            y_label = y_column
     
-    ax_main.set_xlabel(x_label, fontsize=10, labelpad=5)
-    ax_main.set_ylabel(y_label, fontsize=10, labelpad=5)
-    if title:
-        ax_main.set_title(title, fontsize=11, pad=8)
+    ax_main.set_xlabel(x_label, fontsize=16, labelpad=8)  # Increased from 10, 5
+    ax_main.set_ylabel(y_label, fontsize=16, labelpad=8)  # Increased from 10, 5
+    
+    # Remove title as requested
+    # if title:
+    #     ax_main.set_title(title, fontsize=18, pad=10)  # Increased from 11, 8
     
     # Clean up main plot
     sns.despine(ax=ax_main)
@@ -639,6 +657,8 @@ def create_plot(x_column, y_column='normalized_brain_score', title=None, save_pa
     
     if ylim is not None:
         ax_main.set_ylim(ylim)
+    if xlim is not None:
+        ax_main.set_xlim(xlim)
     
     # Legend subplot
     ax_legend = plt.subplot(gs[1])
@@ -658,7 +678,7 @@ def create_plot(x_column, y_column='normalized_brain_score', title=None, save_pa
                 color='w',
                 markerfacecolor=color_dict.get(cat, '#999999'),
                 markeredgecolor='black',
-                markersize=8,
+                markersize=10,  # Increased from 8
                 markeredgewidth=0.5,
                 linestyle='None',
             )
@@ -671,14 +691,14 @@ def create_plot(x_column, y_column='normalized_brain_score', title=None, save_pa
         [cat.replace(' - ', '\n') for cat, _ in sorted_handles],
         title='Models',
         loc='center left',
-        fontsize=10,
-        title_fontsize=12,
+        fontsize=12,  # Increased from 10
+        title_fontsize=14,  # Increased from 12
         frameon=True,
         framealpha=0.9,
         edgecolor='#DDDDDD',
         borderpad=0.5,
         handletextpad=0.5,
-        markerscale=1.2
+        markerscale=1.5  # Increased from 1.2
     )
     
     # Adjust layout
@@ -730,11 +750,20 @@ sns.set_style("ticks")
 
 # Load the data
 clickme_alignment = pd.read_csv('csvs/large_scale_results_hmn.csv')
-neural_alignment = pd.read_csv('csvs/neural_alignment_red_central_it_211_250_shifted.csv')
+neural_alignment = pd.read_csv('csvs/neural_alignment_red_central_it_shifted_211_250.csv')
+# neural_alignment = pd.read_csv('csvs/brainscore_MajajHong2015public_IT.csv')
 model_analysis = pd.read_csv('csvs/model_analysis_gemini.csv')
 model_metadata = pd.read_csv('csvs/model_metadata-in1k.csv')
 
 # Change the data labels - Fix the SettingWithCopyWarning by using .loc
+if "new_brain_score" not in neural_alignment.columns:
+    try:
+        neural_alignment['new_brain_score'] = neural_alignment['brain_score']
+        neural_alignment['new_brain_score_std'] = neural_alignment['brain_score_std']    
+    except:
+        neural_alignment['new_brain_score'] = neural_alignment['brainscore']
+        neural_alignment['new_brain_score_std'] = neural_alignment['brain_score_std']    
+
 # Create a copy of the DataFrame first
 clickme_alignment = clickme_alignment.copy()
 
@@ -814,7 +843,7 @@ if len(lost_models):
 joined_df['category'] = joined_df['model_type_category'] + ' - ' + joined_df['dataset_category']
 
 # Calculate normalized brain score
-joined_df['normalized_brain_score'] = joined_df['brain_score'] / joined_df['ceiling_score']
+joined_df['normalized_brain_score'] = joined_df['new_brain_score']  #  / joined_df['ceiling_score']
 
 # # Prepare for statistics
 # Create a number_of_layers column
@@ -860,7 +889,14 @@ if plot_data:
             save_path=os.path.join(output_dir, 'multi_label_acc_vs_clickme_annotated.png'),
             ylim=(-0.3, 1),
             annotate_outliers=True)
-
+    create_plot('spearman', 
+            y_column='normalized_brain_score',
+            title='Spearman vs Normalized Brain Score', 
+            save_path=os.path.join(output_dir, 'spearman_vs_normalized_brain_score_annotated.png'),
+            ylim=(0.3, 1.05),
+            xlim=(-0.3, 1),
+            plot_lines=False,
+            annotate_outliers=True)
     # # # 
     # create_plot('results_imagenet',
     #         y_column='spearman',
@@ -894,6 +930,8 @@ if plot_data:
     #         annotate_outliers=True)
 
 # Define the variables to analyze
+from itertools import product
+
 dependent_variables = [
     'normalized_brain_score',
     'spearman'
@@ -903,6 +941,12 @@ dependent_variables = [
     # 'results_imagenet_r',
     # 'results_imagenet_a'
 ]
+independent_variables = [
+    'multi_label_acc',
+]
+
+# Create all combinations of dependent and independent variables
+variable_combinations = list(product(dependent_variables, independent_variables))
 
 # Define the categorical and continuous predictors
 categorical_predictors = [
@@ -919,7 +963,7 @@ continuous_predictors = [
     'is_adversarial',
     'is_language',
     'input_size',
-    'multi_label_acc',
+    # 'multi_label_acc',
     'total_params',
     # 'num_normalizations',
     # 'num_skip_connections',
@@ -937,7 +981,7 @@ os.makedirs(anova_dir, exist_ok=True)
 all_anova_results = []  # pd.DataFrame(columns=['Dependent_Variable', 'Predictor', 'F_Value', 'p_Value', 'R_Squared'])
 
 # Run ANOVA analyses for each dependent variable
-for dv in dependent_variables:
+for dv, iv in variable_combinations:
     print(f"\nAnalyzing {dv}...")
     
     # Filter out rows with missing values for this dependent variable
@@ -949,7 +993,7 @@ for dv in dependent_variables:
     
     # Use the stored changepoint if available
     y_column = 'normalized_brain_score' if dv != 'normalized_brain_score' else 'spearman'
-    key = f"{dv}_{y_column}"
+    key = f"{iv}_{y_column}"
     
     changepoint_x = None
     if key in changepoint_cache:
@@ -972,19 +1016,19 @@ for dv in dependent_variables:
     
     # Create data subsets based on changepoint
     if changepoint_x is not None:
-        df_pre = df_filtered[df_filtered[dv] <= changepoint_x].copy()
-        df_post = df_filtered[df_filtered[dv] > changepoint_x].copy()
+        df_pre = df_filtered[df_filtered[iv] <= changepoint_x].copy()
+        df_post = df_filtered[df_filtered[iv] > changepoint_x].copy()
         print(f"Pre-changepoint: {len(df_pre)} samples, Post-changepoint: {len(df_post)} samples")
         
         # Skip if either subset is too small
         if len(df_pre) < 5 or len(df_post) < 5:
             print(f"Not enough data in one of the subsets for {dv}, skipping split analysis...")
-            data_sets = [(df_filtered)]
+            data_sets = [("all", df_filtered)]
         else:
-            data_sets = [(df_filtered), ("pre", df_pre), ("post", df_post)]
+            data_sets = [("all", df_filtered), ("pre", df_pre), ("post", df_post)]
     else:
         print(f"No changepoint found for {dv}, analyzing all data only")
-        data_sets = [(df_filtered)]
+        data_sets = [("all", df_filtered)]
     
     # Run analyses for each data subset
     for subset_name, subset_df in data_sets:
@@ -1000,7 +1044,6 @@ for dv in dependent_variables:
         
         # Effect-code the categorical predictors
         for predictor in categorical_predictors:
-            raise NotImplementedError("Categorical predictors are not implemented yet")
             if predictor in analysis_df.columns and len(analysis_df[predictor].unique()) >= 2:
                 # Get dummies with drop_first=True to create effect coding
                 dummies = pd.get_dummies(analysis_df[predictor], prefix=predictor, drop_first=True)
@@ -1051,7 +1094,6 @@ for dv in dependent_variables:
                     continue
                 
                 # Run multiple regression
-                import pdb; pdb.set_trace()
                 X = sm.add_constant(df_pred[valid_predictors])
                 model = sm.OLS(df_pred[dv], X).fit()
                 
@@ -1073,6 +1115,8 @@ for dv in dependent_variables:
                     
                     beta = model.params[predictor]
                     p_val = model.pvalues[predictor]
+                    import pdb; pdb.set_trace()
+                    std_err = model.bse[predictor]  # Standard error for confidence intervals
                     
                     all_anova_results.append({
                         'Dependent_Variable': f"{dv}_{subset_name}",
@@ -1082,64 +1126,785 @@ for dv in dependent_variables:
                         'p_Value': p_val,    # Individual predictor p-value
                         'R_Squared': r_squared,  # Overall model R²
                         'Beta': beta,
+                        'Std_Error': std_err,  # Add standard error for confidence intervals
                         'Data_Subset': subset_name,
                         'Sample_Size': len(df_pred)
                     })
-                    
-                    # Create plots for significant predictors
-                    if p_val < 0.05:
-                        plt.figure(figsize=(10, 6))
-                        
-                        if pred_type == 'continuous':
-                            sns.regplot(x=predictor, y=dv, data=df_pred, scatter_kws={'alpha':0.7})
-                        else:
-                            sns.boxplot(x=df_pred[predictor], y=df_pred[dv])
-                            
-                        plt.title(f'Effect of {orig_predictor} on {dv} ({subset_name})\nβ={beta:.4f}, p={p_val:.4f}')
-                        plt.tight_layout()
-                        plt.savefig(os.path.join(anova_dir, f'regplot_{dv}_{orig_predictor}_{subset_name}.png'), dpi=300)
-                        plt.close()
             except Exception as e:
                 print(f"Error analyzing {dv} ({subset_name}): {e}")
 
-# Create separate heatmaps for each data subset
-for subset_name in ["pre", "post"]:
-    subset_results = pd.DataFrame([r for r in all_anova_results if r['Data_Subset'] == subset_name])
+
+def plot_pre_post_comparison(variable_combinations, all_anova_results, save_dir='anova_results'):
+    """
+    Create publication-ready plots comparing parameter estimates between pre and post changepoint data.
     
-    if len(subset_results) > 0:
-        significant_results = subset_results[subset_results['p_Value'] < 0.05].copy()
+    Args:
+        variable_combinations: List of (dependent_variable, independent_variable) tuples
+        all_anova_results: List of dictionaries with ANOVA results
+        save_dir: Directory to save the plots
+    """
+    
+    # Set publication-quality style
+    plt.rcParams.update({
+        'font.family': 'sans-serif',
+        'font.sans-serif': ['Raleway'],
+        'font.size': 12,
+        'axes.linewidth': 0.8,
+        'axes.labelsize': 14,
+        'axes.titlesize': 16,
+        'xtick.labelsize': 12,
+        'ytick.labelsize': 12,
+        'legend.fontsize': 12,
+        'lines.linewidth': 1.5,
+        'patch.linewidth': 0.8,
+        'savefig.dpi': 600,
+        'savefig.format': 'pdf'
+    })
+    
+    # Ensure the save directory exists
+    os.makedirs(save_dir, exist_ok=True)
+    
+    # Convert results to DataFrame for easier manipulation
+    results_df = pd.DataFrame(all_anova_results)
+    
+    # First pass: Calculate global min and max values across all plots
+    global_min = float('inf')
+    global_max = float('-inf')
+    
+    # Collect all beta values and their confidence intervals
+    all_values = []
+    
+    for dv, iv in variable_combinations:
+        # Filter results for this DV
+        dv_results = results_df[results_df['Dependent_Variable'].str.startswith(f"{dv}_")]
         
-        if len(significant_results) > 0:
-            # Save the significant results to a CSV
-            significant_results.to_csv(os.path.join(anova_dir, f'significant_relationships_{subset_name}.csv'), index=False)
+        if len(dv_results) == 0:
+            continue
+        
+        # Get unique predictors for this DV
+        predictors = dv_results['Predictor'].unique()
+        
+        # Calculate min and max values including confidence intervals
+        for predictor in predictors:
+            pre_data = dv_results[(dv_results['Predictor'] == predictor) & 
+                                 (dv_results['Data_Subset'] == 'pre')]
+            post_data = dv_results[(dv_results['Predictor'] == predictor) & 
+                                  (dv_results['Data_Subset'] == 'post')]
             
-            # Create a pivot table for the heatmap
-            heatmap_data = significant_results.pivot_table(
-                index='Predictor', 
-                columns='Dependent_Variable',
-                values='R_Squared',
-                fill_value=0
+            if len(pre_data) > 0:
+                pre_beta = pre_data['Beta'].values[0]
+                
+                # Use standard errors directly if available
+                if 'Std_Error' in pre_data.columns and not np.isnan(pre_data['Std_Error'].values[0]):
+                    pre_se = pre_data['Std_Error'].values[0]
+                else:
+                    # Calculate standard errors from p-values
+                    pre_p = pre_data['p_Value'].values[0]
+                    pre_t = max(abs(stats.norm.ppf(pre_p / 2)), 0.001)
+                    pre_se = abs(pre_beta) / pre_t
+                
+                pre_ci = 1.96 * pre_se
+                all_values.append(pre_beta - pre_ci)
+                all_values.append(pre_beta + pre_ci)
+            
+            if len(post_data) > 0:
+                post_beta = post_data['Beta'].values[0]
+                
+                # Use standard errors directly if available
+                if 'Std_Error' in post_data.columns and not np.isnan(post_data['Std_Error'].values[0]):
+                    post_se = post_data['Std_Error'].values[0]
+                else:
+                    # Calculate standard errors from p-values
+                    post_p = post_data['p_Value'].values[0]
+                    post_t = max(abs(stats.norm.ppf(post_p / 2)), 0.001)
+                    post_se = abs(post_beta) / post_t
+                
+                post_ci = 1.96 * post_se
+                all_values.append(post_beta - post_ci)
+                all_values.append(post_beta + post_ci)
+    
+    # Calculate global min and max from all collected values
+    if all_values:
+        # Instead of using the actual minimum, set a fixed minimum around -0.1
+        global_min = -0.2
+        global_max = max(all_values)
+        
+        # Ensure zero is included in the range
+        if global_max < 0:
+            global_max = 0.1  # If all values are negative, set a small positive max
+    else:
+        # Default values if no data
+        global_min = -0.2
+        global_max = 0.5
+    
+    # Add padding to the global limits for the maximum only
+    y_padding = (global_max - global_min) * 0.15  # 15% padding
+    global_max += y_padding
+    
+    # Create a consistent predictor order across all plots
+    # First, collect all predictors from all DVs
+    all_predictors = set()
+    predictor_effects_by_dv = {}
+    
+    for dv, iv in variable_combinations:
+        dv_results = results_df[results_df['Dependent_Variable'].str.startswith(f"{dv}_")]
+        if len(dv_results) == 0:
+            continue
+            
+        predictors = dv_results['Predictor'].unique()
+        predictor_effects = []
+        
+        for predictor in predictors:
+            pre_data = dv_results[(dv_results['Predictor'] == predictor) & 
+                         (dv_results['Data_Subset'] == 'pre')]
+            post_data = dv_results[(dv_results['Predictor'] == predictor) & 
+                                  (dv_results['Data_Subset'] == 'post')]
+            
+            if len(pre_data) > 0 and len(post_data) > 0:
+                pre_beta = pre_data['Beta'].values[0]
+                post_beta = post_data['Beta'].values[0]
+                avg_effect = (abs(pre_beta) + abs(post_beta)) / 2
+                predictor_effects.append((predictor, avg_effect))
+                all_predictors.add(predictor)
+        
+        predictor_effects_by_dv[dv] = predictor_effects
+    
+    # Calculate average effect size across all DVs for each predictor
+    predictor_avg_effects = {}
+    for predictor in all_predictors:
+        effects = []
+        for dv, effects_list in predictor_effects_by_dv.items():
+            for p, effect in effects_list:
+                if p == predictor:
+                    effects.append(effect)
+        if effects:
+            predictor_avg_effects[predictor] = sum(effects) / len(effects)
+        else:
+            predictor_avg_effects[predictor] = 0
+    
+    # Sort predictors by average effect size across all DVs
+    global_sorted_predictors = sorted(predictor_avg_effects.keys(), 
+                                     key=lambda p: predictor_avg_effects[p], 
+                                     reverse=True)
+    
+    # Second pass: Create plots with consistent y-axis limits and predictor order
+    for dv, iv in variable_combinations:
+        print(f"\nCreating comparison plot for {dv} vs {iv}")
+        
+        # Filter results for this DV
+        dv_results = results_df[results_df['Dependent_Variable'].str.startswith(f"{dv}_")]
+        
+        if len(dv_results) == 0:
+            print(f"No results found for {dv}")
+            continue
+        
+        # Get unique predictors for this DV
+        dv_predictors = dv_results['Predictor'].unique()
+        
+        # Use the global predictor order, but only include predictors present for this DV
+        sorted_predictors = [p for p in global_sorted_predictors if p in dv_predictors]
+        
+        # Create figure with fixed dimensions for all plots
+        fig_width = 5.0  # Fixed width for all plots
+        fig_height = 6.0  # Fixed height for all plots
+        fig, ax = plt.subplots(figsize=(fig_width, fig_height))
+        
+        # Set width of bars - narrower bars
+        bar_width = 0.15  # Already reduced from 0.25 or 0.35
+        
+        # Reduce the spacing between pairs of bars by using a denser array for indices
+        # Original:
+        # indices = np.arange(len(sorted_predictors))
+        
+        # Updated - make the spacing between bar groups more compact:
+        indices = np.arange(len(sorted_predictors)) * 0.5  # Multiply by 0.7 to compress spacing
+        
+        # Then keep the rest of the bar positioning the same
+        pre_betas = []
+        post_betas = []
+        pre_cis = []
+        post_cis = []
+        significant_pairs = []
+        P_Values = []
+        # Process each predictor in sorted order
+        for i, predictor in enumerate(sorted_predictors):
+            # Get pre and post results for this predictor
+            pre_data = dv_results[(dv_results['Predictor'] == predictor) & 
+                          (dv_results['Data_Subset'] == 'pre')]
+            post_data = dv_results[(dv_results['Predictor'] == predictor) & 
+                                   (dv_results['Data_Subset'] == 'post')]
+            
+            # Skip if we don't have both pre and post data
+            if len(pre_data) == 0 or len(post_data) == 0:
+                pre_betas.append(0)
+                post_betas.append(0)
+                pre_cis.append(0)
+                post_cis.append(0)
+                significant_pairs.append(False)
+                continue
+            
+            # Extract parameter estimates
+            pre_beta = pre_data['Beta'].values[0]
+            post_beta = post_data['Beta'].values[0]
+            pre_betas.append(pre_beta)
+            post_betas.append(post_beta)
+            
+            # Use standard errors directly if available, otherwise calculate from p-values
+            if 'Std_Error' in pre_data.columns and not np.isnan(pre_data['Std_Error'].values[0]):
+                pre_se = pre_data['Std_Error'].values[0]
+                post_se = post_data['Std_Error'].values[0]
+            else:
+                pre_p = pre_data['p_Value'].values[0]
+                post_p = post_data['p_Value'].values[0]
+                pre_t = max(abs(stats.norm.ppf(pre_p / 2)), 0.001)
+                post_t = max(abs(stats.norm.ppf(post_p / 2)), 0.001)
+                pre_se = abs(pre_beta) / pre_t
+                post_se = abs(post_beta) / post_t
+            
+            # 95% confidence intervals
+            pre_ci = 1.96 * pre_se
+            post_ci = 1.96 * post_se
+            pre_cis.append(pre_ci)
+            post_cis.append(post_ci)
+            
+            # Perform statistical test between pre and post
+            z_stat = (pre_beta - post_beta) / np.sqrt(pre_se**2 + post_se**2)
+            p_value = 2 * (1 - stats.norm.cdf(abs(z_stat)))  # Two-tailed test
+            P_Values.append(p_value)
+            significant_pairs.append(p_value < 0.05)
+        
+        # Create the grouped bar plot with blue and red colors instead of grey
+        pre_color = '#1E88E5'  # Blue
+        post_color = '#E53935'  # Red
+        
+        pre_bars = ax.bar(indices - bar_width/2, pre_betas, bar_width, 
+                         color=pre_color, alpha=0.9, label='Pre-changepoint',
+                         yerr=pre_cis, capsize=3, edgecolor='black', linewidth=0.5)
+        
+        post_bars = ax.bar(indices + bar_width/2, post_betas, bar_width,
+                          color=post_color, alpha=0.9, label='Post-changepoint',
+                          yerr=post_cis, capsize=3, edgecolor='black', linewidth=0.5)
+        
+        # Set consistent y-axis limits for all plots
+        ax.set_ylim(global_min, global_max)
+        
+        # Add a legend to identify pre and post changepoint bars
+        legend = ax.legend(
+            [pre_bars, post_bars],
+            ['Pre-changepoint', 'Post-changepoint'],
+            loc='upper right',
+            frameon=True,
+            framealpha=0.9,
+            edgecolor='#DDDDDD',
+            fontsize=11,
+            ncol=1
+        )
+        
+        # Add significance indicators with improved styling and larger stars
+        for i, (is_significant, P_Value) in enumerate(zip(significant_pairs, P_Values)):
+            if is_significant:
+                # Calculate height for significance bar - closer to the bars
+                # Use a smaller offset from the highest error bar
+                bar_top = max(pre_betas[i] + pre_cis[i], post_betas[i] + post_cis[i])
+                sig_line_height = bar_top + 0.05 * (global_max - global_min)  # Smaller offset
+                
+                # Ensure the significance line doesn't go beyond the plot limits
+                sig_line_height = min(sig_line_height, global_max - 0.1 * (global_max - global_min))
+                
+                # Draw a line connecting the bars
+                ax.plot([indices[i] - bar_width/2, indices[i] + bar_width/2], 
+                        [sig_line_height, sig_line_height], 'k-', linewidth=1.5)
+                
+                # Add larger asterisks with better styling - closer to the line
+                if P_Value < 0.001:
+                    ax.text(indices[i], sig_line_height + 0.02 * (global_max - global_min), '***', 
+                            ha='center', va='bottom', fontsize=24, fontweight='bold')
+                elif P_Value < 0.01:
+                    ax.text(indices[i], sig_line_height + 0.02 * (global_max - global_min), '**', 
+                            ha='center', va='bottom', fontsize=24, fontweight='bold')
+                elif P_Value < 0.05:
+                    ax.text(indices[i], sig_line_height + 0.02 * (global_max - global_min), '*', 
+                            ha='center', va='bottom', fontsize=24, fontweight='bold')
+                elif is_significant:
+                    ax.text(indices[i], sig_line_height + 0.02 * (global_max - global_min), '*', 
+                            ha='center', va='bottom', fontsize=24, fontweight='bold')
+        
+        # Set labels and title with improved styling
+        ax.set_ylabel('Parameter Estimate', fontsize=14, fontweight='bold')
+        
+        # Format title based on dependent variable
+        title_text = f'Pre vs Post Changepoint Parameter Estimates'
+        if 'normalized_brain_score' in dv:
+            title_text += ': Brain Score'
+        elif 'spearman' in dv:
+            title_text += ': ClickMe Score'
+        else:
+            title_text += f': {dv}'
+            
+        ax.set_title(title_text, fontsize=16, fontweight='bold', pad=15)
+        
+        # Set x-ticks at the center of each group with improved styling
+        ax.set_xticks(indices)
+        
+        # Format predictor names for better readability
+        formatted_predictors = []
+        for p in sorted_predictors:
+            # Capitalize first letter and replace underscores with spaces
+            formatted_p = p.replace('_', ' ').capitalize()
+            # Special cases
+            if p == 'is_transformer':
+                formatted_p = 'ViT'
+            elif p == 'is_cnn':
+                formatted_p = 'CNN'
+            elif p == 'is_imagenet':
+                formatted_p = 'ImageNet'
+            elif p == 'is_internet_scale':
+                formatted_p = 'Internet-scale'
+            elif p == 'is_adversarial':
+                formatted_p = 'Adversarially trained'
+            elif p == 'is_language':
+                formatted_p = 'Internet-scale vision & language'
+            elif p == 'multi_label_acc':
+                formatted_p = 'Multi-label Accuracy'
+            elif p == 'total_params':
+                formatted_p = 'Number of parameters'
+            elif p == 'num_layers':
+                formatted_p = 'Number of layers'
+            elif p == 'input_size':
+                formatted_p = 'Input size'
+            formatted_predictors.append(formatted_p)
+            
+        # Rotate x-tick labels more horizontally for better readability
+        ax.set_xticklabels(formatted_predictors, rotation=45, ha='right', fontsize=10)
+        
+        # Add a horizontal line at y=0 with improved styling
+        ax.axhline(y=0, color='gray', linestyle='-', linewidth=0.8, alpha=0.7, zorder=0)
+        
+        # Add grid lines for better readability
+        ax.yaxis.grid(True, linestyle='--', alpha=0.3, zorder=0)
+        
+        # Set y-axis to use fixed number of ticks
+        ax.yaxis.set_major_locator(MaxNLocator(nbins=6))
+        
+        # Remove top and right spines for cleaner look
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
+        
+        # Style the remaining spines
+        for spine in ['left', 'bottom']:
+            ax.spines[spine].set_linewidth(0.8)
+            ax.spines[spine].set_color('#333333')
+        
+        # Adjust layout with more bottom padding for rotated labels
+        plt.tight_layout(pad=1.2, rect=[0, 0.05, 1, 0.95])
+        
+        # Save the figure in multiple formats
+        save_path_png = os.path.join(save_dir, f'{dv}_pre_post_comparison.png')
+        save_path_pdf = os.path.join(save_dir, f'{dv}_pre_post_comparison.pdf')
+        plt.savefig(save_path_png, dpi=300, bbox_inches='tight')
+        plt.savefig(save_path_pdf, bbox_inches='tight')
+        plt.close()
+        
+        # Save the statistical test results
+        stat_results = []
+        for i, predictor in enumerate(sorted_predictors):
+            pre_data = dv_results[(dv_results['Predictor'] == predictor) & 
+                         (dv_results['Data_Subset'] == 'pre')]
+            post_data = dv_results[(dv_results['Predictor'] == predictor) & 
+                                  (dv_results['Data_Subset'] == 'post')]
+            
+            if len(pre_data) == 0 or len(post_data) == 0:
+                continue
+                
+            pre_beta = pre_data['Beta'].values[0]
+            post_beta = post_data['Beta'].values[0]
+            
+            # Calculate standard errors
+            if 'Std_Error' in pre_data.columns and not np.isnan(pre_data['Std_Error'].values[0]):
+                pre_se = pre_data['Std_Error'].values[0]
+                post_se = post_data['Std_Error'].values[0]
+            else:
+                pre_p = pre_data['p_Value'].values[0]
+                post_p = post_data['p_Value'].values[0]
+                pre_t = max(abs(stats.norm.ppf(pre_p / 2)), 0.001)
+                post_t = max(abs(stats.norm.ppf(post_p / 2)), 0.001)
+                pre_se = abs(pre_beta) / pre_t
+                post_se = abs(post_beta) / post_t
+            
+            # Calculate z-statistic and p-value
+            z_stat = (pre_beta - post_beta) / np.sqrt(pre_se**2 + post_se**2)
+            p_value = 2 * (1 - stats.norm.cdf(abs(z_stat)))
+            
+            stat_results.append({
+                'Predictor': predictor,
+                'Pre_Beta': pre_beta,
+                'Post_Beta': post_beta,
+                'Pre_CI': 1.96 * pre_se,
+                'Post_CI': 1.96 * post_se,
+                'Z_Statistic': z_stat,
+                'P_Value': p_value,
+                'Significant': p_value < 0.05
+            })
+        
+        if stat_results:
+            stat_df = pd.DataFrame(stat_results)
+            stat_df.to_csv(os.path.join(save_dir, f'{dv}_pre_post_stats.csv'), index=False)
+            
+            # Create a heatmap of the pre-post differences with improved styling
+            # Use fixed dimensions for consistency
+            plt.figure(figsize=(6.5, max(5, len(stat_results) * 0.4)))  # Fixed width, height scales with content
+            
+            # Prepare data for heatmap
+            heatmap_data = pd.DataFrame({
+                'Predictor': stat_df['Predictor'],
+                'Pre-Post Difference': stat_df['Pre_Beta'] - stat_df['Post_Beta'],
+                'P_Value': stat_df['P_Value']
+            })
+            
+            # Sort by absolute difference
+            heatmap_data['Abs_Diff'] = abs(heatmap_data['Pre-Post Difference'])
+            heatmap_data = heatmap_data.sort_values('Abs_Diff', ascending=False)
+            
+            # Create colormap with significance indicators
+            cmap = plt.cm.coolwarm
+            
+            # Plot heatmap
+            ax = plt.subplot(111)
+            im = ax.imshow(
+                heatmap_data['Pre-Post Difference'].values.reshape(-1, 1),
+                cmap=cmap,
+                aspect='auto',
+                vmin=-max(abs(heatmap_data['Pre-Post Difference'])),
+                vmax=max(abs(heatmap_data['Pre-Post Difference']))
             )
             
-            plt.figure(figsize=(12, 10))
-            sns.heatmap(heatmap_data, annot=True, cmap='viridis', fmt='.2f')
-            plt.title(f'R-squared Values for Significant Predictors ({subset_name} data, p < 0.05)')
+            # Add colorbar with improved styling
+            cbar = plt.colorbar(im)
+            cbar.set_label('Pre-Post Difference', fontsize=12, fontweight='bold')
+            
+            # Format predictor names for better readability
+            formatted_heatmap_predictors = []
+            for p in heatmap_data['Predictor']:
+                # Capitalize first letter and replace underscores with spaces
+                formatted_p = p.replace('_', ' ').capitalize()
+                # Special cases
+                if p == 'is_transformer':
+                    formatted_p = 'ViT'
+                elif p == 'is_cnn':
+                    formatted_p = 'CNN'
+                elif p == 'is_imagenet':
+                    formatted_p = 'ImageNet'
+                elif p == 'is_internet_scale':
+                    formatted_p = 'Internet-scale'
+                elif p == 'is_adversarial':
+                    formatted_p = 'Adversarially trained'
+                elif p == 'is_language':
+                    formatted_p = 'Internet-scale vision & language'
+                elif p == 'multi_label_acc':
+                    formatted_p = 'Multi-label Accuracy'
+                elif p == 'total_params':
+                    formatted_p = 'Number of parameters'
+                elif p == 'num_layers':
+                    formatted_p = 'Number of layers'
+                elif p == 'input_size':
+                    formatted_p = 'Input size'
+                formatted_heatmap_predictors.append(formatted_p)
+            
+            # Set y-ticks (predictors) with improved styling
+            ax.set_yticks(range(len(heatmap_data)))
+            ax.set_yticklabels(formatted_heatmap_predictors, fontsize=12)
+            
+            # Remove x-ticks
+            ax.set_xticks([])
+            
+            # Add significance indicators with improved styling - larger stars
+            for i, P_Value in enumerate(heatmap_data['P_Value']):
+                if P_Value < 0.001:
+                    ax.text(0, i, '***', ha='center', va='center', fontsize=24, 
+                           color='black', fontweight='bold')
+            
+            # Set title with improved styling
+            title_text = f'Pre-Post Differences'
+            if 'normalized_brain_score' in dv:
+                title_text += ': Brain Score'
+            elif 'spearman' in dv:
+                title_text += ': ClickMe Score'
+            else:
+                title_text += f': {dv}'
+                
+            plt.title(title_text, fontsize=16, fontweight='bold', pad=15)
+            
+            # Remove top and right spines for cleaner look
+            ax.spines['top'].set_visible(False)
+            ax.spines['right'].set_visible(False)
+            
+            # Style the remaining spines
+            for spine in ['left', 'bottom']:
+                ax.spines[spine].set_linewidth(0.8)
+                ax.spines[spine].set_color('#333333')
+            
+            # Save the heatmap in multiple formats
             plt.tight_layout()
-            plt.savefig(os.path.join(anova_dir, f'r_squared_heatmap_{subset_name}.png'), dpi=300)
+            save_path_png = os.path.join(save_dir, f'{dv}_pre_post_heatmap.png')
+            save_path_pdf = os.path.join(save_dir, f'{dv}_pre_post_heatmap.pdf')
+            plt.savefig(save_path_png, dpi=300, bbox_inches='tight')
+            plt.savefig(save_path_pdf, bbox_inches='tight')
             plt.close()
             
-            # Create a heatmap of F-values
-            f_heatmap_data = significant_results.pivot_table(
-                index='Predictor', 
-                columns='Dependent_Variable',
-                values='F_Value',
-                fill_value=0
-            )
-            
-            plt.figure(figsize=(12, 10))
-            sns.heatmap(f_heatmap_data, annot=True, cmap='magma', fmt='.1f', norm=LogNorm())
-            plt.title(f'F-Values for Significant Predictors ({subset_name} data, p < 0.05)')
-            plt.tight_layout()
-            plt.savefig(os.path.join(anova_dir, f'f_value_heatmap_{subset_name}.png'), dpi=300)
-            plt.close()
-print(f"\nAll ANOVA analyses complete. Results saved to {anova_dir}/")
+        print(f"Saved publication-ready comparison plot and statistics for {dv} to {save_dir}")
+
+# After all analyses are complete, create the pre vs post comparison plots
+plot_pre_post_comparison(variable_combinations, all_anova_results, save_dir=anova_dir)
+
+# Load the data
+# Replace 'your_data.csv' with your actual file
+df = joined_df
+
+# Create a composite score for group 1 metrics using PCA
+group1_metrics = ['multi_label_acc', 'results_sketch', 'results_imagenetv2_matched_frequency', 
+                 'results_imagenet_r', 'results_imagenet_a']
+
+# Make sure all required columns exist
+for col in group1_metrics + ['spearman', 'normalized_brain_score']:
+    if col not in df.columns:
+        raise ValueError(f"Column {col} not found in the dataset")
+
+# Standardize the group 1 metrics
+scaler = StandardScaler()
+group1_data = scaler.fit_transform(df[group1_metrics].dropna())
+
+# Apply PCA to get a composite score
+pca = PCA(n_components=1)
+group1_composite = pca.fit_transform(group1_data).flatten()
+
+# Create a new dataframe with only the rows that have valid data for all metrics
+valid_indices = df[group1_metrics + ['spearman', 'normalized_brain_score']].dropna().index
+df_clean = df.loc[valid_indices].copy()
+df_clean['group1_composite'] = group1_composite
+
+# Function to calculate R² between variables
+def calculate_r_squared(X, y):
+    model = LinearRegression()
+    model.fit(X, y)
+    return model.score(X, y)
+
+# Calculate all pairwise and three-way R² values
+# 1. Individual R² values
+r2_1 = calculate_r_squared(df_clean[['group1_composite']], df_clean['group1_composite'])  # Always 1.0
+r2_2 = calculate_r_squared(df_clean[['spearman']], df_clean['spearman'])  # Always 1.0
+r2_3 = calculate_r_squared(df_clean[['normalized_brain_score']], df_clean['normalized_brain_score'])  # Always 1.0
+
+# 2. Pairwise R² values
+r2_12 = calculate_r_squared(df_clean[['group1_composite', 'spearman']], df_clean['group1_composite'])
+r2_13 = calculate_r_squared(df_clean[['group1_composite', 'normalized_brain_score']], df_clean['group1_composite'])
+r2_23 = calculate_r_squared(df_clean[['spearman', 'normalized_brain_score']], df_clean['spearman'])
+
+# 3. Three-way R² value
+r2_123 = calculate_r_squared(df_clean[['group1_composite', 'spearman', 'normalized_brain_score']], 
+                             df_clean['group1_composite'])
+
+# Calculate direct R² values (how much one explains the other)
+r2_1_by_2 = calculate_r_squared(df_clean[['spearman']], df_clean['group1_composite'])
+r2_1_by_3 = calculate_r_squared(df_clean[['normalized_brain_score']], df_clean['group1_composite'])
+r2_2_by_1 = calculate_r_squared(df_clean[['group1_composite']], df_clean['spearman'])
+r2_2_by_3 = calculate_r_squared(df_clean[['normalized_brain_score']], df_clean['spearman'])
+r2_3_by_1 = calculate_r_squared(df_clean[['group1_composite']], df_clean['normalized_brain_score'])
+r2_3_by_2 = calculate_r_squared(df_clean[['spearman']], df_clean['normalized_brain_score'])
+
+# Calculate regions for Venn diagram
+# A: Unique to group1_composite
+# B: Unique to spearman
+# C: Unique to normalized_brain_score
+# AB: Shared between group1_composite and spearman
+# AC: Shared between group1_composite and normalized_brain_score
+# BC: Shared between spearman and normalized_brain_score
+# ABC: Shared among all three
+
+r2_1_by_23 = calculate_r_squared(df_clean[['spearman', 'normalized_brain_score']], df_clean['group1_composite'])
+r2_2_by_13 = calculate_r_squared(df_clean[['group1_composite', 'normalized_brain_score']], df_clean['spearman'])
+r2_3_by_12 = calculate_r_squared(df_clean[['group1_composite', 'spearman']], df_clean['normalized_brain_score'])
+
+# Calculate regions for the Venn diagram
+A = 1 - r2_1_by_23  # Variance in 1 not explained by 2 or 3
+B = 1 - r2_2_by_13  # Variance in 2 not explained by 1 or 3
+C = 1 - r2_3_by_12  # Variance in 3 not explained by 1 or 2
+
+AB = r2_1_by_2 - (r2_1_by_23 - r2_1_by_3)  # Shared between 1 and 2 only
+AC = r2_1_by_3 - (r2_1_by_23 - r2_1_by_2)  # Shared between 1 and 3 only
+BC = r2_2_by_3 - (r2_2_by_13 - r2_2_by_1)  # Shared between 2 and 3 only
+
+# The three-way intersection
+ABC = r2_1_by_23 - ((r2_1_by_2 - (r2_1_by_23 - r2_1_by_3)) + (r2_1_by_3 - (r2_1_by_23 - r2_1_by_2)))
+
+# Make sure all values are non-negative (there can be small negative values due to calculation precision)
+regions = {'100': max(0, A), '010': max(0, B), '001': max(0, C), 
+           '110': max(0, AB), '101': max(0, AC), '011': max(0, BC), 
+           '111': max(0, ABC)}
+
+# Create the Venn diagram
+plt.figure(figsize=(10, 8))
+v = venn3(subsets=regions, set_labels=('Performance Metrics', 'Spearman', 'Brain Score'))
+
+# Add a title and adjust the appearance
+plt.title('Variance Explained Between Metric Groups', fontsize=16)
+
+# Add information about how much of each group is explained by others
+txt = (f"Performance metrics explained by Spearman: {r2_1_by_2:.2f}\n"
+       f"Performance metrics explained by Brain Score: {r2_1_by_3:.2f}\n"
+       f"Performance metrics explained by both: {r2_1_by_23:.2f}\n\n"
+       f"Spearman explained by Performance metrics: {r2_2_by_1:.2f}\n"
+       f"Spearman explained by Brain Score: {r2_2_by_3:.2f}\n"
+       f"Spearman explained by both: {r2_2_by_13:.2f}\n\n"
+       f"Brain Score explained by Performance metrics: {r2_3_by_1:.2f}\n"
+       f"Brain Score explained by Spearman: {r2_3_by_2:.2f}\n"
+       f"Brain Score explained by both: {r2_3_by_12:.2f}\n\n"
+       f"Shared variance among all three: {ABC:.2f}")
+
+plt.figtext(0.1, -0.1, txt, fontsize=12, wrap=True)
+plt.tight_layout()
+plt.subplots_adjust(bottom=0.3)  # Make room for the text
+
+# Display the diagram
+plt.savefig('variance_venn_diagram.png', dpi=300, bbox_inches='tight')
+plt.show()
+
+# Print a summary of the variance sharing
+print("Summary of variance sharing:")
+print(f"Performance metrics (unique variance): {A:.2f}")
+print(f"Spearman (unique variance): {B:.2f}")
+print(f"Brain Score (unique variance): {C:.2f}")
+print(f"Shared between Performance metrics and Spearman only: {AB:.2f}")
+print(f"Shared between Performance metrics and Brain Score only: {AC:.2f}")
+print(f"Shared between Spearman and Brain Score only: {BC:.2f}")
+print(f"Shared among all three: {ABC:.2f}")
+
+# Function to calculate the shared and unique variance between three variables
+def calculate_variance_partitioning(df, var1, var2, var3):
+    # Calculate the R² for each individual model
+    X1 = sm.add_constant(df[[var1]])
+    X2 = sm.add_constant(df[[var2]])
+    X3 = sm.add_constant(df[[var3]])
+    
+    # Individual R² for each variable predicting the others
+    model_1_2 = sm.OLS(df[var2], X1).fit()
+    r2_1_2 = model_1_2.rsquared
+    
+    model_1_3 = sm.OLS(df[var3], X1).fit()
+    r2_1_3 = model_1_3.rsquared
+    
+    model_2_1 = sm.OLS(df[var1], X2).fit()
+    r2_2_1 = model_2_1.rsquared
+    
+    model_2_3 = sm.OLS(df[var3], X2).fit()
+    r2_2_3 = model_2_3.rsquared
+    
+    model_3_1 = sm.OLS(df[var1], X3).fit()
+    r2_3_1 = model_3_1.rsquared
+    
+    model_3_2 = sm.OLS(df[var2], X3).fit()
+    r2_3_2 = model_3_2.rsquared
+    
+    # Models with pairs of predictors
+    X12 = sm.add_constant(df[[var1, var2]])
+    X13 = sm.add_constant(df[[var1, var3]])
+    X23 = sm.add_constant(df[[var2, var3]])
+    
+    model_12_3 = sm.OLS(df[var3], X12).fit()
+    r2_12_3 = model_12_3.rsquared
+    
+    model_13_2 = sm.OLS(df[var2], X13).fit()
+    r2_13_2 = model_13_2.rsquared
+    
+    model_23_1 = sm.OLS(df[var1], X23).fit()
+    r2_23_1 = model_23_1.rsquared
+    
+    # Calculate variance components
+    # Unique variance of var1
+    unique_var1 = r2_12_3 - r2_2_3
+    
+    # Unique variance of var2
+    unique_var2 = r2_13_2 - r2_1_3
+    
+    # Unique variance of var3
+    unique_var3 = r2_23_1 - r2_2_1
+    
+    # Shared variance between var1 and var2 (excluding var3)
+    shared_var1_var2 = r2_1_2 + r2_2_1 - unique_var1 - unique_var2
+    
+    # Shared variance between var1 and var3 (excluding var2)
+    shared_var1_var3 = r2_1_3 + r2_3_1 - unique_var1 - unique_var3
+    
+    # Shared variance between var2 and var3 (excluding var1)
+    shared_var2_var3 = r2_2_3 + r2_3_2 - unique_var2 - unique_var3
+    
+    # Shared variance among all three variables
+    total_shared = (r2_1_2 + r2_1_3 + r2_2_1 + r2_2_3 + r2_3_1 + r2_3_2) / 2 - unique_var1 - unique_var2 - unique_var3 - shared_var1_var2 - shared_var1_var3 - shared_var2_var3
+    
+    # Ensure non-negative values (due to potential estimation issues)
+    unique_var1 = max(0, unique_var1)
+    unique_var2 = max(0, unique_var2)
+    unique_var3 = max(0, unique_var3)
+    shared_var1_var2 = max(0, shared_var1_var2)
+    shared_var1_var3 = max(0, shared_var1_var3)
+    shared_var2_var3 = max(0, shared_var2_var3)
+    total_shared = max(0, total_shared)
+    
+    # Return variance components
+    return {
+        'unique_var1': unique_var1,
+        'unique_var2': unique_var2,
+        'unique_var3': unique_var3,
+        'shared_var1_var2': shared_var1_var2,
+        'shared_var1_var3': shared_var1_var3, 
+        'shared_var2_var3': shared_var2_var3,
+        'total_shared': total_shared,
+        'r2_1_2': r2_1_2,
+        'r2_1_3': r2_1_3,
+        'r2_2_1': r2_2_1,
+        'r2_2_3': r2_2_3,
+        'r2_3_1': r2_3_1,
+        'r2_3_2': r2_3_2
+    }
+
+# Calculate variance components
+variance_components = calculate_variance_partitioning(joined_df, 'multi_label_acc', 'spearman', 'normalized_brain_score')
+
+# Extract components for the Venn diagram
+venn_values = (
+    variance_components['unique_var1'],
+    variance_components['unique_var2'],
+    variance_components['shared_var1_var2'],
+    variance_components['unique_var3'],
+    variance_components['shared_var1_var3'],
+    variance_components['shared_var2_var3'],
+    variance_components['total_shared']
+)
+
+# Create figure with fixed size
+plt.figure(figsize=(10, 10))
+
+# Create the Venn diagram with equal-sized circles
+v = venn3(
+    subsets=venn_values, 
+    set_labels=('multi_label_acc', 'spearman', 'normalized_brain_score')
+)
+
+# Important: Format each label to show percentage with 2 decimal places
+for label_id in ['100', '010', '001', '110', '101', '011', '111']:
+    if v.get_label_by_id(label_id):
+        current_value = float(v.get_label_by_id(label_id).get_text())
+        # Use .2f to get exactly 2 decimal places, then add % sign
+        percentage_str = f'{current_value*100:.2f}%'
+        v.get_label_by_id(label_id).set_text(percentage_str)
+
+plt.title('Shared Variance Between Metrics')
+plt.show()
+
+# Print the variance components with 2 decimal places
+print(f"Unique variance of multi_label_acc: {variance_components['unique_var1']:.2%}")
+print(f"Unique variance of spearman: {variance_components['unique_var2']:.2%}")
+print(f"Unique variance of normalized_brain_score: {variance_components['unique_var3']:.2%}")
+print(f"Shared variance between multi_label_acc and spearman: {variance_components['shared_var1_var2']:.2%}")
+print(f"Shared variance between multi_label_acc and normalized_brain_score: {variance_components['shared_var1_var3']:.2%}")
+print(f"Shared variance between spearman and normalized_brain_score: {variance_components['shared_var2_var3']:.2%}")
+print(f"Shared variance among all three: {variance_components['total_shared']:.2%}")
