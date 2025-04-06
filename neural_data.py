@@ -1115,7 +1115,6 @@ for dv, iv in variable_combinations:
                     
                     beta = model.params[predictor]
                     p_val = model.pvalues[predictor]
-                    import pdb; pdb.set_trace()
                     std_err = model.bse[predictor]  # Standard error for confidence intervals
                     
                     all_anova_results.append({
@@ -1457,9 +1456,9 @@ def plot_pre_post_comparison(variable_combinations, all_anova_results, save_dir=
             elif p == 'is_cnn':
                 formatted_p = 'CNN'
             elif p == 'is_imagenet':
-                formatted_p = 'ImageNet'
+                formatted_p = 'ImageNet multi-label accuracy'
             elif p == 'is_internet_scale':
-                formatted_p = 'Internet-scale'
+                formatted_p = 'Internet-scale vision'
             elif p == 'is_adversarial':
                 formatted_p = 'Adversarially trained'
             elif p == 'is_language':
@@ -1593,9 +1592,9 @@ def plot_pre_post_comparison(variable_combinations, all_anova_results, save_dir=
                 elif p == 'is_cnn':
                     formatted_p = 'CNN'
                 elif p == 'is_imagenet':
-                    formatted_p = 'ImageNet'
+                    formatted_p = 'ImageNet multi-label accuracy'
                 elif p == 'is_internet_scale':
-                    formatted_p = 'Internet-scale'
+                    formatted_p = 'Internet-scale vision'
                 elif p == 'is_adversarial':
                     formatted_p = 'Adversarially trained'
                 elif p == 'is_language':
